@@ -1,6 +1,12 @@
 import { Router } from "express";
 import { login, me } from "../controllers/authController.js";
 import {
+  pushConfig,
+  subscribePush,
+  unsubscribePush,
+  updatePushPreferences
+} from "../controllers/pushController.js";
+import {
   acceptCustomRequestQuoteByBuyer,
   createCustomRequestByBuyer,
   checkoutWalletPay,
@@ -33,8 +39,12 @@ const router = Router();
 
 router.get("/health", health);
 router.get("/health/ready", readiness);
+router.get("/push/config", pushConfig);
 router.post("/auth/login", strictAuthRateLimit, rejectUnknownBodyKeys(["email", "password"]), login);
 router.get("/auth/me", requireAuth, me);
+router.post("/push/subscribe", requireAuth, rejectUnknownBodyKeys(["subscription"]), subscribePush);
+router.post("/push/unsubscribe", requireAuth, rejectUnknownBodyKeys(["endpoint"]), unsubscribePush);
+router.post("/push/preferences", requireAuth, rejectUnknownBodyKeys(["push"]), updatePushPreferences);
 router.get("/bootstrap", getBootstrap);
 router.post("/state", requireAuth, requireRole("admin"), requireNonProduction, idempotencyOptional, rejectUnknownBodyKeys(["db"]), saveState);
 router.post("/reset", requireAuth, requireRole("admin"), requireNonProduction, idempotencyOptional, reset);

@@ -8,10 +8,19 @@ export const seedData = {
       "country": "Thailand",
       "city": "Bangkok",
       "address": "Admin Office, Bangkok",
-      "walletBalance": 0,
+      "walletBalance": 2.8,
       "role": "admin",
       "password": "demo123",
-      "accountStatus": "active"
+      "accountStatus": "active",
+      "notificationPreferences": {
+        "message": true,
+        "engagement": true,
+        "push": {
+          "message": true,
+          "engagement": true,
+          "adminOps": true
+        }
+      }
     },
     {
       "id": "admin-2",
@@ -34,7 +43,7 @@ export const seedData = {
       "country": "Thailand",
       "city": "Bangkok",
       "address": "สุขุมวิท, Bangkok",
-      "walletBalance": 0,
+      "walletBalance": 5.6,
       "role": "seller",
       "sellerId": "nina-b",
       "password": "demo123",
@@ -132,7 +141,7 @@ export const seedData = {
       "country": "Thailand",
       "city": "Bangkok",
       "address": "Sathon, Bangkok",
-      "walletBalance": 0,
+      "walletBalance": 5.6,
       "role": "seller",
       "sellerId": "dao-p",
       "password": "demo123",
@@ -146,7 +155,7 @@ export const seedData = {
       "country": "United States",
       "city": "Seattle",
       "address": "123 Pine Street",
-      "walletBalance": 24.6,
+      "walletBalance": 17.6,
       "role": "buyer",
       "password": "demo123",
       "accountStatus": "active"
@@ -159,7 +168,7 @@ export const seedData = {
       "country": "United States",
       "city": "Portland",
       "address": "77 NW Market Street",
-      "walletBalance": 20,
+      "walletBalance": 13,
       "role": "buyer",
       "password": "demo123",
       "accountStatus": "active"
@@ -743,6 +752,54 @@ export const seedData = {
   "orders": [],
   "walletTransactions": [
     {
+      "id": "txn_1773646751128_02jz6ia_message_seller",
+      "userId": "seller-8",
+      "type": "message_fee",
+      "amount": 5.6,
+      "description": "Message earning from Steve M.",
+      "createdAt": "2026-03-16T07:39:11.126Z"
+    },
+    {
+      "id": "txn_1773646751131_67dlfmg_message_admin",
+      "userId": "admin-1",
+      "type": "message_fee",
+      "amount": 1.4,
+      "description": "Platform commission from buyer message fee",
+      "createdAt": "2026-03-16T07:39:11.126Z"
+    },
+    {
+      "id": "txn_1773646751131_58nkyxc_message_buyer",
+      "userId": "buyer-2",
+      "type": "message_fee",
+      "amount": -7,
+      "description": "Message fee to Dao P.",
+      "createdAt": "2026-03-16T07:39:11.126Z"
+    },
+    {
+      "id": "txn_1773640380620_pdfqybb_message_seller",
+      "userId": "seller-1",
+      "type": "message_fee",
+      "amount": 5.6,
+      "description": "Message earning from Alex T.",
+      "createdAt": "2026-03-16T05:53:00.619Z"
+    },
+    {
+      "id": "txn_1773640380620_45z6bf2_message_admin",
+      "userId": "admin-1",
+      "type": "message_fee",
+      "amount": 1.4,
+      "description": "Platform commission from buyer message fee",
+      "createdAt": "2026-03-16T05:53:00.619Z"
+    },
+    {
+      "id": "txn_1773640380620_97py9mf_message_buyer",
+      "userId": "buyer-1",
+      "type": "message_fee",
+      "amount": -7,
+      "description": "Message fee to Nina B.",
+      "createdAt": "2026-03-16T05:53:00.619Z"
+    },
+    {
       "id": "txn_1",
       "userId": "buyer-1",
       "type": "top_up",
@@ -764,6 +821,42 @@ export const seedData = {
       "createdAt": "2026-03-06T09:00:00.000Z",
       "readByBuyer": true,
       "readBySeller": false
+    },
+    {
+      "id": "msg_1773640380620_29klh",
+      "conversationId": "buyer-1__nina-b",
+      "buyerId": "buyer-1",
+      "sellerId": "nina-b",
+      "senderId": "buyer-1",
+      "senderRole": "buyer",
+      "body": "Push test message from automation",
+      "bodyOriginal": "Push test message from automation",
+      "sourceLanguage": "en",
+      "translations": {
+        "en": "Push test message from automation"
+      },
+      "feeCharged": 7,
+      "createdAt": "2026-03-16T05:53:00.619Z",
+      "readByBuyer": true,
+      "readBySeller": false
+    },
+    {
+      "id": "msg_1773646751131_tsrv9",
+      "conversationId": "buyer-2__dao-p",
+      "buyerId": "buyer-2",
+      "sellerId": "dao-p",
+      "senderId": "buyer-2",
+      "senderRole": "buyer",
+      "body": "this is a test message",
+      "bodyOriginal": "this is a test message",
+      "sourceLanguage": "en",
+      "translations": {
+        "en": "this is a test message"
+      },
+      "feeCharged": 7,
+      "createdAt": "2026-03-16T07:39:11.126Z",
+      "readByBuyer": true,
+      "readBySeller": false
     }
   ],
   "notifications": [
@@ -775,6 +868,37 @@ export const seedData = {
       "conversationId": "buyer-1__nina-b",
       "read": false,
       "createdAt": "2026-03-06T09:00:01.000Z"
+    },
+    {
+      "id": "notif_1773640380620_pfa52",
+      "userId": "seller-1",
+      "type": "message",
+      "text": "New buyer message from Alex T..",
+      "conversationId": "buyer-1__nina-b",
+      "read": false,
+      "createdAt": "2026-03-16T05:53:00.619Z"
+    },
+    {
+      "id": "notif_1773646751132_zh8cr",
+      "userId": "seller-8",
+      "type": "message",
+      "text": "New buyer message from Steve M..",
+      "conversationId": "buyer-2__dao-p",
+      "read": false,
+      "createdAt": "2026-03-16T07:39:11.126Z"
+    }
+  ],
+  "pushSubscriptions": [
+    {
+      "id": "push_sub_1773640380592_v1txog",
+      "userId": "admin-1",
+      "role": "admin",
+      "endpoint": "https://updates.push.services.mozilla.com/wpush/v2/fake-subscription-id",
+      "p256dh": "BCVfakep256dhkey1234567890abcdef",
+      "auth": "fakeauthkey1234",
+      "isActive": false,
+      "createdAt": "2026-03-16T05:53:00.592Z",
+      "updatedAt": "2026-03-16T05:53:00.627Z"
     }
   ],
   "blocks": [],

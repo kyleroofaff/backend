@@ -1,4 +1,5 @@
 import { getState, replaceStateAndSeed } from "../db/store.js";
+import { dispatchPushNotification } from "./pushService.js";
 
 const MESSAGE_FEE_THB = 7;
 const CUSTOM_REQUEST_FEE_THB = 7;
@@ -8,6 +9,40 @@ const SALE_SPLIT = {
   sellerWithoutBar: 0.8,
   bar: 0.1
 };
+
+function buildLocalizedMessageTemplates(senderName, conversationId) {
+  return {
+    titleByLang: {
+      en: "New buyer message",
+      th: "มีข้อความใหม่จากผู้ซื้อ",
+      my: "ဝယ်သူထံမှ မက်ဆေ့ချ်အသစ်",
+      ru: "Новое сообщение от покупателя"
+    },
+    bodyByLang: {
+      en: `${senderName} sent a new message. Conversation: ${conversationId}`,
+      th: `${senderName} ส่งข้อความใหม่แล้ว บทสนทนา: ${conversationId}`,
+      my: `${senderName} က မက်ဆေ့ချ်အသစ်ပို့ထားသည်။ စကားပြောခန်း: ${conversationId}`,
+      ru: `${senderName} отправил(а) новое сообщение. Диалог: ${conversationId}`
+    }
+  };
+}
+
+function buildLocalizedCustomRequestTemplates(senderName, requestId) {
+  return {
+    titleByLang: {
+      en: "New custom request",
+      th: "คำขอพิเศษใหม่",
+      my: "Custom request အသစ်",
+      ru: "Новый индивидуальный запрос"
+    },
+    bodyByLang: {
+      en: `${senderName} created a custom request (${requestId}).`,
+      th: `${senderName} สร้างคำขอพิเศษ (${requestId})`,
+      my: `${senderName} သည် custom request တစ်ခု (${requestId}) ဖန်တီးခဲ့သည်။`,
+      ru: `${senderName} создал(а) индивидуальный запрос (${requestId}).`
+    }
+  };
+}
 
 function round2(value) {
   return Number(Number(value || 0).toFixed(2));
@@ -191,6 +226,20 @@ export async function sendBuyerPaidMessage({ buyerUserId, sellerId, conversation
   };
 
   await replaceStateAndSeed(next);
+  if (sellerUser?.id) {
+    const templates = buildLocalizedMessageTemplates(buyer.name || "Buyer", conversationId);
+    await dispatchPushNotification({
+      userId: sellerUser.id,
+      preferenceType: "message",
+      route: `/account?scope=seller&conversationId=${encodeURIComponent(conversationId)}`,
+      titleByLang: templates.titleByLang,
+      bodyByLang: templates.bodyByLang,
+      data: {
+        kind: "buyer_message_received",
+        conversationId
+      }
+    }).catch(() => {});
+  }
   return {
     ok: true,
     walletBalance: nextBuyerBalance,
@@ -340,6 +389,20 @@ export async function createBuyerCustomRequest({
   };
 
   await replaceStateAndSeed(next);
+  if (sellerUser?.id) {
+    const templates = buildLocalizedCustomRequestTemplates(normalizedBuyerName || "Buyer", requestId);
+    await dispatchPushNotification({
+      userId: sellerUser.id,
+      preferenceType: "message",
+      route: `/custom-requests?requestId=${encodeURIComponent(requestId)}`,
+      titleByLang: templates.titleByLang,
+      bodyByLang: templates.bodyByLang,
+      data: {
+        kind: "custom_request_created",
+        requestId
+      }
+    }).catch(() => {});
+  }
   return {
     ok: true,
     requestId,

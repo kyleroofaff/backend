@@ -1,5 +1,6 @@
 import { getState, replaceStateAndSeed } from "../db/store.js";
 import { hasPostgresConfig, withPgTransaction } from "../db/postgres.js";
+import { dispatchPushNotification } from "./pushService.js";
 
 const MIN_WALLET_TOP_UP_THB = 500;
 const SALE_SPLIT = {
@@ -215,7 +216,8 @@ async function acceptInState({ requestId, buyerUserId }) {
     ok: true,
     requestId,
     quotedPrice,
-    payout: split
+    payout: split,
+    sellerUserId: sellerUser?.id || null
   };
 }
 
@@ -326,14 +328,39 @@ async function acceptInPostgres({ requestId, buyerUserId }) {
       ok: true,
       requestId,
       quotedPrice,
-      payout: split
+      payout: split,
+      sellerUserId: sellerUserId || null
     };
   });
 }
 
 export async function acceptCustomRequestQuote({ requestId, buyerUserId }) {
-  if (hasPostgresConfig()) {
-    return acceptInPostgres({ requestId, buyerUserId });
+  const result = hasPostgresConfig()
+    ? await acceptInPostgres({ requestId, buyerUserId })
+    : await acceptInState({ requestId, buyerUserId });
+
+  if (result?.ok && result.sellerUserId && !result.alreadyProcessed) {
+    await dispatchPushNotification({
+      userId: result.sellerUserId,
+      preferenceType: "engagement",
+      route: `/custom-requests?requestId=${encodeURIComponent(requestId)}`,
+      titleByLang: {
+        en: "Custom request quote accepted",
+        th: "คำเสนอราคาคำขอพิเศษได้รับการยอมรับแล้ว",
+        my: "Custom request စျေးနှုန်းကို လက်ခံပြီးပါပြီ",
+        ru: "Предложение по индивидуальному запросу принято"
+      },
+      bodyByLang: {
+        en: `Buyer accepted your quote for request ${requestId}.`,
+        th: `ผู้ซื้อยอมรับราคาของคุณสำหรับคำขอ ${requestId} แล้ว`,
+        my: `ဝယ်သူသည် request ${requestId} အတွက် သင့်စျေးနှုန်းကို လက်ခံခဲ့သည်။`,
+        ru: `Покупатель принял вашу цену по запросу ${requestId}.`
+      },
+      data: {
+        kind: "custom_request_quote_accepted",
+        requestId
+      }
+    }).catch(() => {});
   }
-  return acceptInState({ requestId, buyerUserId });
+  return result;
 }

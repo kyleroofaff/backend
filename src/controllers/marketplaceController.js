@@ -11,6 +11,7 @@ import {
   resetState
 } from "../db/store.js";
 import { sendPlatformEmail, sendSellerApprovalRequestEmail } from "../services/mailer.js";
+import { dispatchPushNotification } from "../services/pushService.js";
 import { getWalletReconciliationSummary } from "../services/reconciliation.js";
 import { acceptCustomRequestQuote } from "../services/customRequestPayments.js";
 import { payCheckoutWithWallet, topUpWallet } from "../services/walletCommerce.js";
@@ -293,6 +294,30 @@ export async function notifySellerApprovalRequest(req, res, next) {
       sellerEmail,
       requestedAt
     });
+    const adminUserId = req.auth?.user?.id || null;
+    if (adminUserId) {
+      await dispatchPushNotification({
+        userId: adminUserId,
+        preferenceType: "adminOps",
+        route: "/admin",
+        titleByLang: {
+          en: "Seller approval requested",
+          th: "มีคำขออนุมัติผู้ขายใหม่",
+          my: "Seller approval request အသစ်",
+          ru: "Новый запрос на одобрение продавца"
+        },
+        bodyByLang: {
+          en: `${sellerName} requested seller approval.`,
+          th: `${sellerName} ส่งคำขออนุมัติผู้ขายแล้ว`,
+          my: `${sellerName} သည် seller approval တောင်းဆိုခဲ့သည်။`,
+          ru: `${sellerName} запросил(а) одобрение продавца.`
+        },
+        data: {
+          kind: "seller_approval_request",
+          sellerEmail
+        }
+      }).catch(() => {});
+    }
 
     return res.json({
       ok: true,
@@ -325,6 +350,31 @@ export async function notifyPlatformEmail(req, res, next) {
       subject,
       text
     });
+    const adminUserId = req.auth?.user?.id || null;
+    if (adminUserId) {
+      await dispatchPushNotification({
+        userId: adminUserId,
+        preferenceType: "adminOps",
+        route: "/admin",
+        titleByLang: {
+          en: "Platform email sent",
+          th: "ส่งอีเมลแพลตฟอร์มแล้ว",
+          my: "Platform email ပို့ပြီးပါပြီ",
+          ru: "Платформенное письмо отправлено"
+        },
+        bodyByLang: {
+          en: `Email sent to ${toEmail || "recipient"}: ${subject}`,
+          th: `ส่งอีเมลไปยัง ${toEmail || "ผู้รับ"}: ${subject}`,
+          my: `${toEmail || "လက်ခံသူ"} သို့ email ပို့ပြီးပါပြီ: ${subject}`,
+          ru: `Письмо отправлено на ${toEmail || "адрес"}: ${subject}`
+        },
+        data: {
+          kind: "platform_email_sent",
+          toEmail,
+          subject
+        }
+      }).catch(() => {});
+    }
 
     return res.json({
       ok: true,
