@@ -670,6 +670,54 @@ export const seedData = {
       "imageName": "ribbed-crop-top.jpg",
       "status": "Published",
       "publishedAt": "2026-03-04"
+    },
+    {
+      "id": "product-bodysuit-midnight-mesh",
+      "title": "Midnight Mesh Bodysuit",
+      "slug": "midnight-mesh-bodysuit",
+      "sellerId": "dao-p",
+      "price": 1725,
+      "size": "M",
+      "color": "Black",
+      "style": "Bodysuit",
+      "fabric": "Mesh Blend",
+      "daysWorn": "1-3 days",
+      "shipping": "Worldwide",
+      "condition": "Excellent",
+      "description": "Sheer mesh bodysuit with soft stretch and snap closure.",
+      "features": [
+        "Sheer mesh",
+        "Stretch fit",
+        "Snap closure"
+      ],
+      "image": "https://placehold.co/900x1200/d4d4d8/111827?text=Midnight+Mesh+Bodysuit",
+      "imageName": "midnight-mesh-bodysuit.jpg",
+      "status": "Published",
+      "publishedAt": "2026-03-17"
+    },
+    {
+      "id": "product-cami-satin-champagne",
+      "title": "Champagne Satin Cami",
+      "slug": "champagne-satin-cami",
+      "sellerId": "nina-b",
+      "price": 1290,
+      "size": "S",
+      "color": "Beige",
+      "style": "Top",
+      "fabric": "Satin",
+      "daysWorn": "Unworn",
+      "shipping": "Worldwide",
+      "condition": "Excellent",
+      "description": "Light satin cami with adjustable straps and clean neckline.",
+      "features": [
+        "Satin finish",
+        "Adjustable straps",
+        "Minimal silhouette"
+      ],
+      "image": "https://placehold.co/900x1200/fef3c7/92400e?text=Champagne+Satin+Cami",
+      "imageName": "champagne-satin-cami.jpg",
+      "status": "Published",
+      "publishedAt": "2026-03-17"
     }
   ],
   "sellerPosts": [
