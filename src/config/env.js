@@ -19,5 +19,8 @@ export const env = {
   smtpFrom: process.env.SMTP_FROM || "no-reply@thailandpanties.local",
   vapidPublicKey: process.env.VAPID_PUBLIC_KEY || "",
   vapidPrivateKey: process.env.VAPID_PRIVATE_KEY || "",
-  vapidSubject: process.env.VAPID_SUBJECT || ""
+  vapidSubject: process.env.VAPID_SUBJECT || "",
+  allowLegacyPlaintextPasswords:
+    process.env.ALLOW_LEGACY_PLAINTEXT_PASSWORDS === "true"
+    || (process.env.ALLOW_LEGACY_PLAINTEXT_PASSWORDS == null && (process.env.NODE_ENV || "development") !== "production")
 };

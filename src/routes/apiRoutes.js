@@ -28,6 +28,10 @@ import {
   reset,
   saveState,
   sendBuyerMessageWithFee,
+  updatePromptPayReceiver,
+  createMonthlyPayoutRun,
+  markPayoutItemSent,
+  markPayoutItemFailed,
   walletTopUp,
   walletReconciliation
 } from "../controllers/marketplaceController.js";
@@ -59,6 +63,10 @@ router.get("/seller-post-reports", requireAuth, requireRole("admin"), getPostRep
 router.post("/seller-post-reports/:reportId/resolve", requireAuth, requireRole("admin"), idempotencyOptional, resolvePostReport);
 router.post("/notifications/seller-approval-request", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["sellerName", "sellerEmail", "requestedAt"]), notifySellerApprovalRequest);
 router.post("/notifications/platform-email", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["toEmail", "toName", "subject", "text", "templateKey", "actionUrl"]), notifyPlatformEmail);
+router.post("/admin/site-settings/promptpay", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["promptPayReceiverMobile"]), updatePromptPayReceiver);
+router.post("/admin/payout-runs/monthly", requireAuth, requireRole("admin"), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["monthValue", "notes"]), createMonthlyPayoutRun);
+router.post("/admin/payout-items/:payoutItemId/sent", requireAuth, requireRole("admin"), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["method", "externalReference", "notes"]), markPayoutItemSent);
+router.post("/admin/payout-items/:payoutItemId/failed", requireAuth, requireRole("admin"), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["reason"]), markPayoutItemFailed);
 router.post("/translate", requireAuth, idempotencyOptional, rejectUnknownBodyKeys(["text", "targetLang"]), translateText);
 router.get("/reconciliation/wallet", requireAuth, requireRole("admin"), walletReconciliation);
 router.post(

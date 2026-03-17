@@ -16,8 +16,62 @@ import { getWalletReconciliationSummary } from "../services/reconciliation.js";
 import { acceptCustomRequestQuote } from "../services/customRequestPayments.js";
 import { payCheckoutWithWallet, topUpWallet } from "../services/walletCommerce.js";
 import { createBuyerCustomRequest, sendBuyerPaidMessage } from "../services/buyerMoneyFlows.js";
+import { env } from "../config/env.js";
 
 const SUPPORTED_TRANSLATION_LANGUAGES = new Set(["en", "th", "my", "ru"]);
+const PAYOUT_SCHEDULE = "monthly";
+const PAYOUT_MIN_THRESHOLD_THB = 100;
+const PAYOUT_HOLD_DAYS = 14;
+const DEFAULT_PROMPTPAY_RECEIVER_MOBILE = "0812345678";
+const PAYOUT_ELIGIBLE_TYPES = new Set(["message_fee", "order_sale_earning", "order_bar_commission"]);
+
+function normalizePayoutMethod(method) {
+  const normalized = String(method || "").trim().toLowerCase();
+  if (["bank_transfer", "promptpay", "other"].includes(normalized)) return normalized;
+  return "bank_transfer";
+}
+
+function getMonthRangeFromValue(monthValue) {
+  const value = String(monthValue || "").trim();
+  const match = /^(\d{4})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) return null;
+  const periodStart = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
+  const periodEnd = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+  return {
+    periodLabel: periodStart.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" }),
+    periodStartIso: periodStart.toISOString(),
+    periodEndIso: periodEnd.toISOString()
+  };
+}
+
+function ensureAdminCollections(state) {
+  return {
+    ...state,
+    siteSettings: {
+      promptPayReceiverMobile: String(state?.siteSettings?.promptPayReceiverMobile || DEFAULT_PROMPTPAY_RECEIVER_MOBILE).trim() || DEFAULT_PROMPTPAY_RECEIVER_MOBILE
+    },
+    payoutRuns: Array.isArray(state?.payoutRuns) ? state.payoutRuns : [],
+    payoutItems: Array.isArray(state?.payoutItems) ? state.payoutItems : [],
+    payoutEvents: Array.isArray(state?.payoutEvents) ? state.payoutEvents : [],
+    notifications: Array.isArray(state?.notifications) ? state.notifications : [],
+    walletTransactions: Array.isArray(state?.walletTransactions) ? state.walletTransactions : [],
+    users: Array.isArray(state?.users) ? state.users : []
+  };
+}
+
+function isEligiblePayoutWalletTransaction(entry, recipient) {
+  if (!entry?.id || !recipient?.id) return false;
+  if (!["seller", "bar"].includes(recipient.role)) return false;
+  const amount = Number(entry.amount || 0);
+  if (!Number.isFinite(amount) || amount <= 0) return false;
+  if (!PAYOUT_ELIGIBLE_TYPES.has(String(entry.type || ""))) return false;
+  const createdAtMs = new Date(entry.createdAt || 0).getTime();
+  if (!Number.isFinite(createdAtMs) || createdAtMs <= 0) return false;
+  return true;
+}
 
 export function health(_req, res) {
   res.json({
@@ -30,8 +84,14 @@ export function health(_req, res) {
 export async function readiness(_req, res) {
   const checks = {
     api: "ok",
-    auth: "configured"
+    auth: env.jwtSecret ? "configured" : "missing_jwt_secret"
   };
+  if (!env.jwtSecret) {
+    return res.status(503).json({
+      ok: false,
+      checks
+    });
+  }
   try {
     const summary = await getWalletReconciliationSummary();
     checks.wallet_reconciliation = summary.expectedTypeImbalances.length ? "warning" : "ok";
@@ -56,7 +116,17 @@ export async function readiness(_req, res) {
 }
 
 export function getBootstrap(_req, res) {
-  res.json({ db: getState() });
+  const state = getState();
+  const sanitizedUsers = (state.users || []).map((user) => {
+    const { password, passwordHash, ...safeUser } = user || {};
+    return safeUser;
+  });
+  res.json({
+    db: {
+      ...state,
+      users: sanitizedUsers
+    }
+  });
 }
 
 export function saveState(req, res) {
@@ -83,6 +153,277 @@ export function reset(req, res) {
   }
   const state = resetState();
   return res.json({ ok: true, db: state });
+}
+
+export function updatePromptPayReceiver(req, res) {
+  const state = ensureAdminCollections(getState());
+  const sanitized = String(req.body?.promptPayReceiverMobile || "").replace(/[^\d+]/g, "").trim();
+  if (!sanitized) {
+    return res.status(400).json({ ok: false, error: "PromptPay mobile number is required." });
+  }
+  const nextState = {
+    ...state,
+    siteSettings: {
+      ...state.siteSettings,
+      promptPayReceiverMobile: sanitized
+    }
+  };
+  replaceState(nextState);
+  return res.json({ ok: true, message: "PromptPay receiver saved.", db: nextState });
+}
+
+export function createMonthlyPayoutRun(req, res) {
+  if (PAYOUT_SCHEDULE !== "monthly") {
+    return res.status(400).json({ ok: false, error: "Unsupported payout schedule." });
+  }
+  const state = ensureAdminCollections(getState());
+  const monthValue = req.body?.monthValue;
+  const notes = String(req.body?.notes || "").trim();
+  const monthRange = getMonthRangeFromValue(monthValue);
+  if (!monthRange) {
+    return res.status(400).json({ ok: false, error: "Select a valid month (YYYY-MM)." });
+  }
+  const existingRun = state.payoutRuns.find((run) => (
+    run?.periodStart === monthRange.periodStartIso
+    && run?.periodEnd === monthRange.periodEndIso
+    && run?.status !== "cancelled"
+  ));
+  if (existingRun) {
+    return res.status(409).json({ ok: false, error: `A payout run already exists for ${monthRange.periodLabel}.` });
+  }
+
+  const now = new Date().toISOString();
+  const holdCutoffMs = Date.now() - (PAYOUT_HOLD_DAYS * 24 * 60 * 60 * 1000);
+  const periodStartMs = new Date(monthRange.periodStartIso).getTime();
+  const periodEndMs = new Date(monthRange.periodEndIso).getTime();
+  const userByIdMap = Object.fromEntries(state.users.map((user) => [user.id, user]));
+  const paidSourceTxIds = new Set();
+  state.payoutItems.forEach((item) => {
+    if (item?.status !== "sent") return;
+    (item?.sourceTxIds || []).forEach((txId) => {
+      if (txId) paidSourceTxIds.add(String(txId));
+    });
+  });
+  const groupedByRecipient = {};
+  state.walletTransactions.forEach((entry) => {
+    const recipient = userByIdMap[entry.userId];
+    if (!isEligiblePayoutWalletTransaction(entry, recipient)) return;
+    if (paidSourceTxIds.has(String(entry.id))) return;
+    const createdAtMs = new Date(entry.createdAt || 0).getTime();
+    if (!Number.isFinite(createdAtMs) || createdAtMs < periodStartMs || createdAtMs > periodEndMs) return;
+    if (createdAtMs > holdCutoffMs) return;
+    if (!groupedByRecipient[entry.userId]) {
+      groupedByRecipient[entry.userId] = {
+        recipientUserId: entry.userId,
+        recipientRole: recipient.role,
+        sourceTxIds: [],
+        grossEligible: 0
+      };
+    }
+    groupedByRecipient[entry.userId].sourceTxIds.push(String(entry.id));
+    groupedByRecipient[entry.userId].grossEligible = Number(
+      (groupedByRecipient[entry.userId].grossEligible + Number(entry.amount || 0)).toFixed(2)
+    );
+  });
+  const runId = `payout_run_${Date.now()}`;
+  const holdUntilMs = new Date(monthRange.periodEndIso).getTime() + (PAYOUT_HOLD_DAYS * 24 * 60 * 60 * 1000);
+  const payoutItemsForRun = Object.values(groupedByRecipient).map((entry, index) => {
+    const netPayable = Number((entry.grossEligible || 0).toFixed(2));
+    const status = netPayable >= PAYOUT_MIN_THRESHOLD_THB ? "ready" : "skipped_below_threshold";
+    return {
+      id: `payout_item_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`,
+      runId,
+      recipientUserId: entry.recipientUserId,
+      recipientRole: entry.recipientRole,
+      currency: "THB",
+      grossEligible: netPayable,
+      threshold: PAYOUT_MIN_THRESHOLD_THB,
+      netPayable,
+      status,
+      method: "bank_transfer",
+      externalReference: "",
+      paidAt: "",
+      paidByUserId: "",
+      notes: "",
+      sourceTxIds: entry.sourceTxIds,
+      createdAt: now
+    };
+  });
+  const payoutRun = {
+    id: runId,
+    schedule: PAYOUT_SCHEDULE,
+    periodLabel: monthRange.periodLabel,
+    periodStart: monthRange.periodStartIso,
+    periodEnd: monthRange.periodEndIso,
+    holdUntil: new Date(holdUntilMs).toISOString(),
+    status: "processing",
+    createdByUserId: req.auth?.user?.id || "",
+    createdAt: now,
+    completedAt: "",
+    notes
+  };
+  const payoutEventsForRun = payoutItemsForRun.map((item) => ({
+    id: `payout_evt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    payoutItemId: item.id,
+    eventType: "created",
+    actorUserId: req.auth?.user?.id || "",
+    createdAt: now,
+    payload: {
+      runId,
+      amount: item.netPayable,
+      status: item.status,
+      sourceTxCount: (item.sourceTxIds || []).length
+    }
+  }));
+  const nextState = {
+    ...state,
+    payoutRuns: [payoutRun, ...state.payoutRuns],
+    payoutItems: [...payoutItemsForRun, ...state.payoutItems],
+    payoutEvents: [...payoutEventsForRun, ...state.payoutEvents]
+  };
+  replaceState(nextState);
+  return res.json({
+    ok: true,
+    runId,
+    message: `Created ${monthRange.periodLabel} payout run with ${payoutItemsForRun.length} item(s).`,
+    db: nextState
+  });
+}
+
+export function markPayoutItemSent(req, res) {
+  const state = ensureAdminCollections(getState());
+  const payoutItemId = String(req.params.payoutItemId || "").trim();
+  const normalizedReference = String(req.body?.externalReference || "").trim();
+  const method = normalizePayoutMethod(req.body?.method);
+  const notes = String(req.body?.notes || "").trim();
+  if (!payoutItemId) {
+    return res.status(400).json({ ok: false, error: "payoutItemId is required." });
+  }
+  if (!normalizedReference) {
+    return res.status(400).json({ ok: false, error: "Transfer reference is required before marking sent." });
+  }
+  const idx = state.payoutItems.findIndex((item) => item.id === payoutItemId);
+  if (idx < 0) {
+    return res.status(404).json({ ok: false, error: "Payout item not found." });
+  }
+  const item = state.payoutItems[idx];
+  if (item?.status === "sent") {
+    return res.status(409).json({ ok: false, error: "This payout item is already marked as sent." });
+  }
+  const recipient = state.users.find((user) => user.id === item.recipientUserId);
+  if (!recipient || !["seller", "bar"].includes(recipient.role)) {
+    return res.status(400).json({ ok: false, error: "Recipient is invalid for payout." });
+  }
+  const now = new Date().toISOString();
+  const updatedItem = {
+    ...item,
+    status: "sent",
+    method,
+    externalReference: normalizedReference,
+    notes,
+    paidAt: now,
+    paidByUserId: req.auth?.user?.id || ""
+  };
+  const nextPayoutItems = [...state.payoutItems];
+  nextPayoutItems[idx] = updatedItem;
+  const runHasPendingReady = nextPayoutItems.some((row) => row.runId === item.runId && row.status === "ready");
+  const nextPayoutRuns = state.payoutRuns.map((run) => (
+    run.id !== item.runId
+      ? run
+      : {
+          ...run,
+          status: runHasPendingReady ? "processing" : "completed",
+          completedAt: runHasPendingReady ? (run.completedAt || "") : now
+        }
+  ));
+  const eventRow = {
+    id: `payout_evt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    payoutItemId: updatedItem.id,
+    eventType: "marked_sent",
+    actorUserId: req.auth?.user?.id || "",
+    createdAt: now,
+    payload: {
+      method,
+      reference: normalizedReference,
+      notes,
+      amount: updatedItem.netPayable
+    }
+  };
+  const nextState = {
+    ...state,
+    payoutRuns: nextPayoutRuns,
+    payoutItems: nextPayoutItems,
+    payoutEvents: [eventRow, ...state.payoutEvents],
+    notifications: [
+      {
+        id: `notif_payout_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        userId: updatedItem.recipientUserId,
+        type: "engagement",
+        text: `Payout sent: THB ${Number(updatedItem.netPayable || 0).toFixed(2)}. Ref ${normalizedReference}.`,
+        read: false,
+        createdAt: now
+      },
+      ...state.notifications
+    ]
+  };
+  replaceState(nextState);
+  return res.json({ ok: true, message: `Marked payout sent to ${recipient.name || recipient.id}.`, db: nextState });
+}
+
+export function markPayoutItemFailed(req, res) {
+  const state = ensureAdminCollections(getState());
+  const payoutItemId = String(req.params.payoutItemId || "").trim();
+  const reason = String(req.body?.reason || "").trim();
+  if (!payoutItemId) {
+    return res.status(400).json({ ok: false, error: "payoutItemId is required." });
+  }
+  const idx = state.payoutItems.findIndex((item) => item.id === payoutItemId);
+  if (idx < 0) {
+    return res.status(404).json({ ok: false, error: "Payout item not found." });
+  }
+  const item = state.payoutItems[idx];
+  if (item?.status === "sent") {
+    return res.status(409).json({ ok: false, error: "Sent payout items cannot be marked failed." });
+  }
+  const now = new Date().toISOString();
+  const updatedItem = {
+    ...item,
+    status: "failed",
+    notes: reason || item?.notes || "",
+    paidAt: "",
+    paidByUserId: req.auth?.user?.id || ""
+  };
+  const nextPayoutItems = [...state.payoutItems];
+  nextPayoutItems[idx] = updatedItem;
+  const runHasPendingReady = nextPayoutItems.some((row) => row.runId === item.runId && row.status === "ready");
+  const nextPayoutRuns = state.payoutRuns.map((run) => (
+    run.id !== item.runId
+      ? run
+      : {
+          ...run,
+          status: runHasPendingReady ? "processing" : "completed",
+          completedAt: runHasPendingReady ? (run.completedAt || "") : now
+        }
+  ));
+  const eventRow = {
+    id: `payout_evt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    payoutItemId: updatedItem.id,
+    eventType: "marked_failed",
+    actorUserId: req.auth?.user?.id || "",
+    createdAt: now,
+    payload: {
+      reason: updatedItem.notes || "manual_failure",
+      amount: updatedItem.netPayable
+    }
+  };
+  const nextState = {
+    ...state,
+    payoutRuns: nextPayoutRuns,
+    payoutItems: nextPayoutItems,
+    payoutEvents: [eventRow, ...state.payoutEvents]
+  };
+  replaceState(nextState);
+  return res.json({ ok: true, message: "Marked payout item as failed.", db: nextState });
 }
 
 export function getProducts(_req, res) {

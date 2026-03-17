@@ -3,14 +3,14 @@ export const seedData = {
     {
       "id": "admin-1",
       "name": "Admin",
-      "email": "admin@thailandpanties.com",
+      "email": "admin@example.com",
       "phone": "+66 2 000 0000",
       "country": "Thailand",
       "city": "Bangkok",
       "address": "Admin Office, Bangkok",
       "walletBalance": 2.8,
       "role": "admin",
-      "password": "demo123",
+      "password": "scrypt$b5c4e573d549c7555a7bfc8d65f409f2$7c48658330f8095c4a3538eb58089ef62677899e2808c87d69bb22e134c8a5f90a4cd789d6a5f77b8c3bf43ff87af564fa2065d8866233dcdf309596a5553a40",
       "accountStatus": "active",
       "notificationPreferences": {
         "message": true,
@@ -23,19 +23,6 @@ export const seedData = {
       }
     },
     {
-      "id": "admin-2",
-      "name": "Kyle Roof",
-      "email": "kyleroofaff@gmail.com",
-      "phone": "",
-      "country": "",
-      "city": "",
-      "address": "",
-      "walletBalance": 0,
-      "role": "admin",
-      "password": "12345",
-      "accountStatus": "active"
-    },
-    {
       "id": "seller-1",
       "name": "Nina B.",
       "email": "nina@example.com",
@@ -46,7 +33,7 @@ export const seedData = {
       "walletBalance": 5.6,
       "role": "seller",
       "sellerId": "nina-b",
-      "password": "demo123",
+      "password": "scrypt$56c9b5fa4014665e41be6a7d5d0bf6b1$5296fda9c898dd3a84006a138173e401bf0d3f447f2f5f6b159f76cd0e3ffaf0f3a8dbbc6874c8f2228ea911b7018e059f1c0f449439f62b81d776358f5bc230",
       "accountStatus": "active"
     },
     {
@@ -60,7 +47,7 @@ export const seedData = {
       "walletBalance": 0,
       "role": "seller",
       "sellerId": "mali-k",
-      "password": "demo123",
+      "password": "scrypt$56c9b5fa4014665e41be6a7d5d0bf6b1$5296fda9c898dd3a84006a138173e401bf0d3f447f2f5f6b159f76cd0e3ffaf0f3a8dbbc6874c8f2228ea911b7018e059f1c0f449439f62b81d776358f5bc230",
       "accountStatus": "active"
     },
     {
@@ -74,7 +61,7 @@ export const seedData = {
       "walletBalance": 0,
       "role": "seller",
       "sellerId": "prae-s",
-      "password": "demo123",
+      "password": "scrypt$56c9b5fa4014665e41be6a7d5d0bf6b1$5296fda9c898dd3a84006a138173e401bf0d3f447f2f5f6b159f76cd0e3ffaf0f3a8dbbc6874c8f2228ea911b7018e059f1c0f449439f62b81d776358f5bc230",
       "accountStatus": "active"
     },
     {
@@ -88,7 +75,7 @@ export const seedData = {
       "walletBalance": 0,
       "role": "seller",
       "sellerId": "lila-r",
-      "password": "demo123",
+      "password": "scrypt$56c9b5fa4014665e41be6a7d5d0bf6b1$5296fda9c898dd3a84006a138173e401bf0d3f447f2f5f6b159f76cd0e3ffaf0f3a8dbbc6874c8f2228ea911b7018e059f1c0f449439f62b81d776358f5bc230",
       "accountStatus": "active"
     },
     {
@@ -102,7 +89,7 @@ export const seedData = {
       "walletBalance": 0,
       "role": "seller",
       "sellerId": "anya-v",
-      "password": "demo123",
+      "password": "scrypt$56c9b5fa4014665e41be6a7d5d0bf6b1$5296fda9c898dd3a84006a138173e401bf0d3f447f2f5f6b159f76cd0e3ffaf0f3a8dbbc6874c8f2228ea911b7018e059f1c0f449439f62b81d776358f5bc230",
       "accountStatus": "active"
     },
     {
@@ -116,7 +103,7 @@ export const seedData = {
       "walletBalance": 0,
       "role": "seller",
       "sellerId": "sora-p",
-      "password": "demo123",
+      "password": "scrypt$56c9b5fa4014665e41be6a7d5d0bf6b1$5296fda9c898dd3a84006a138173e401bf0d3f447f2f5f6b159f76cd0e3ffaf0f3a8dbbc6874c8f2228ea911b7018e059f1c0f449439f62b81d776358f5bc230",
       "accountStatus": "active"
     },
     {
@@ -130,7 +117,7 @@ export const seedData = {
       "walletBalance": 0,
       "role": "seller",
       "sellerId": "kiko-n",
-      "password": "demo123",
+      "password": "scrypt$56c9b5fa4014665e41be6a7d5d0bf6b1$5296fda9c898dd3a84006a138173e401bf0d3f447f2f5f6b159f76cd0e3ffaf0f3a8dbbc6874c8f2228ea911b7018e059f1c0f449439f62b81d776358f5bc230",
       "accountStatus": "active"
     },
     {
@@ -144,7 +131,7 @@ export const seedData = {
       "walletBalance": 5.6,
       "role": "seller",
       "sellerId": "dao-p",
-      "password": "demo123",
+      "password": "scrypt$56c9b5fa4014665e41be6a7d5d0bf6b1$5296fda9c898dd3a84006a138173e401bf0d3f447f2f5f6b159f76cd0e3ffaf0f3a8dbbc6874c8f2228ea911b7018e059f1c0f449439f62b81d776358f5bc230",
       "accountStatus": "active"
     },
     {
@@ -157,7 +144,7 @@ export const seedData = {
       "address": "123 Pine Street",
       "walletBalance": 17.6,
       "role": "buyer",
-      "password": "demo123",
+      "password": "scrypt$56c9b5fa4014665e41be6a7d5d0bf6b1$5296fda9c898dd3a84006a138173e401bf0d3f447f2f5f6b159f76cd0e3ffaf0f3a8dbbc6874c8f2228ea911b7018e059f1c0f449439f62b81d776358f5bc230",
       "accountStatus": "active"
     },
     {
@@ -170,7 +157,21 @@ export const seedData = {
       "address": "77 NW Market Street",
       "walletBalance": 13,
       "role": "buyer",
-      "password": "demo123",
+      "password": "scrypt$56c9b5fa4014665e41be6a7d5d0bf6b1$5296fda9c898dd3a84006a138173e401bf0d3f447f2f5f6b159f76cd0e3ffaf0f3a8dbbc6874c8f2228ea911b7018e059f1c0f449439f62b81d776358f5bc230",
+      "accountStatus": "active"
+    },
+    {
+      "id": "bar-user-1",
+      "name": "Bangkok Lounge",
+      "email": "bar@example.com",
+      "phone": "+66 2 555 0000",
+      "country": "Thailand",
+      "city": "Bangkok",
+      "address": "Rama 4, Bangkok",
+      "walletBalance": 0,
+      "role": "bar",
+      "barId": "bangkok-lounge",
+      "password": "scrypt$56c9b5fa4014665e41be6a7d5d0bf6b1$5296fda9c898dd3a84006a138173e401bf0d3f447f2f5f6b159f76cd0e3ffaf0f3a8dbbc6874c8f2228ea911b7018e059f1c0f449439f62b81d776358f5bc230",
       "accountStatus": "active"
     }
   ],

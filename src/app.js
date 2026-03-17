@@ -11,6 +11,13 @@ const allowedOrigins = env.clientOrigin
   .map((origin) => origin.trim())
   .filter(Boolean);
 
+function createCorsBlockedError(origin) {
+  const error = new Error(`CORS blocked for origin: ${origin}`);
+  error.status = 403;
+  error.code = "CORS_ORIGIN_DENIED";
+  return error;
+}
+
 app.use(
   cors({
     origin(origin, callback) {
@@ -25,7 +32,7 @@ app.use(
         return;
       }
 
-      callback(new Error(`CORS blocked for origin: ${origin}`));
+      callback(createCorsBlockedError(origin));
     },
     credentials: true
   })
@@ -47,7 +54,11 @@ app.use("/api", apiRoutes);
 
 app.use((err, _req, res, _next) => {
   console.error(err);
-  res.status(500).json({ error: "Internal server error" });
+  if (err?.code === "CORS_ORIGIN_DENIED") {
+    return res.status(403).json({ error: "CORS origin denied" });
+  }
+  const status = Number(err?.status || 500);
+  return res.status(status).json({ error: status >= 500 ? "Internal server error" : String(err?.message || "Request failed") });
 });
 
 export default app;

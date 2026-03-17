@@ -50,6 +50,9 @@ export function requireAuth(req, res, next) {
     if (!user) {
       return res.status(401).json({ error: "Invalid authentication token." });
     }
+    if (String(user.accountStatus || "active") !== "active") {
+      return res.status(403).json({ error: "Account is not active." });
+    }
     req.auth = {
       ...payload,
       user: toPublicUser(user)

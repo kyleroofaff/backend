@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { env } from "../config/env.js";
 
 const SCRYPT_KEY_LENGTH = 64;
 
@@ -14,6 +15,7 @@ export function verifyPassword(password, passwordHash) {
   if (!normalizedHash) return false;
 
   if (!normalizedHash.startsWith("scrypt$")) {
+    if (!env.allowLegacyPlaintextPasswords) return false;
     return normalizedPassword === normalizedHash;
   }
 
