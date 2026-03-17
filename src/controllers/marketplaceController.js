@@ -1087,12 +1087,16 @@ export async function notifyPlatformEmail(req, res, next) {
     const toEmail = String(req.body?.toEmail || "").trim().toLowerCase();
     const toName = String(req.body?.toName || "").trim();
     const subject = String(req.body?.subject || "").trim();
-    const text = String(req.body?.text || "").trim();
+    const text = String(req.body?.text || req.body?.body || "").trim();
     const templateKey = String(req.body?.templateKey || "").trim();
     const actionUrl = String(req.body?.actionUrl || "").trim();
 
     if (!toEmail || !subject || !text) {
-      return res.status(400).json({ error: "toEmail, subject, and text are required." });
+      const missing = [];
+      if (!toEmail) missing.push("toEmail");
+      if (!subject) missing.push("subject");
+      if (!text) missing.push("text/body");
+      return res.status(400).json({ error: `Missing required fields: ${missing.join(", ")}` });
     }
 
     const fromEmail = String(req.body?.fromEmail || "").trim().toLowerCase();

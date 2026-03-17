@@ -68,7 +68,7 @@ router.post("/seller-posts/:postId/report", requireAuth, requireRole("buyer", "s
 router.get("/seller-post-reports", requireAuth, requireRole("admin"), getPostReports);
 router.post("/seller-post-reports/:reportId/resolve", requireAuth, requireRole("admin"), idempotencyOptional, resolvePostReport);
 router.post("/notifications/seller-approval-request", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["sellerName", "sellerEmail", "requestedAt"]), notifySellerApprovalRequest);
-router.post("/notifications/platform-email", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["toEmail", "toName", "subject", "text", "templateKey", "actionUrl", "fromEmail", "replyToEmail"]), notifyPlatformEmail);
+router.post("/notifications/platform-email", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["toEmail", "toName", "subject", "text", "body", "templateKey", "actionUrl", "fromEmail", "replyToEmail"]), notifyPlatformEmail);
 router.post("/webhooks/postmark/inbound", ingestPostmarkInboundEmail);
 router.post("/admin/site-settings/promptpay", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["promptPayReceiverMobile"]), updatePromptPayReceiver);
 router.post("/admin/payout-runs/monthly", requireAuth, requireRole("admin"), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["monthValue", "notes"]), createMonthlyPayoutRun);
