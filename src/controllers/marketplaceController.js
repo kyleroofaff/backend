@@ -24,6 +24,59 @@ const PAYOUT_MIN_THRESHOLD_THB = 100;
 const PAYOUT_HOLD_DAYS = 14;
 const DEFAULT_PROMPTPAY_RECEIVER_MOBILE = "0812345678";
 const PAYOUT_ELIGIBLE_TYPES = new Set(["message_fee", "order_sale_earning", "order_bar_commission"]);
+const EMAIL_INBOX_STATUSES = new Set(["open", "pending_customer", "closed"]);
+
+function normalizeMailboxType(value) {
+  return String(value || "").trim().toLowerCase() === "support" ? "support" : "admin";
+}
+
+function getMailboxAddress(mailbox) {
+  const normalized = normalizeMailboxType(mailbox);
+  return normalized === "support"
+    ? String(env.supportInboxEmail || "support@thailandpanties.com").trim().toLowerCase()
+    : String(env.adminInboxEmail || "admin@thailandpanties.com").trim().toLowerCase();
+}
+
+function ensureEmailInboxCollections(state) {
+  return {
+    ...state,
+    adminEmailThreads: Array.isArray(state?.adminEmailThreads) ? state.adminEmailThreads : [],
+    adminEmailMessages: Array.isArray(state?.adminEmailMessages) ? state.adminEmailMessages : []
+  };
+}
+
+function normalizeEmailValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function parseRecipientEmails(payload) {
+  const values = [];
+  if (Array.isArray(payload?.ToFull)) {
+    payload.ToFull.forEach((entry) => {
+      const email = normalizeEmailValue(entry?.Email || entry?.email);
+      if (email) values.push(email);
+    });
+  }
+  String(payload?.To || "")
+    .split(",")
+    .map((part) => normalizeEmailValue(part))
+    .filter(Boolean)
+    .forEach((value) => values.push(value));
+  const originalRecipient = normalizeEmailValue(payload?.OriginalRecipient);
+  if (originalRecipient) values.push(originalRecipient);
+  return [...new Set(values)];
+}
+
+function resolveMailboxFromRecipients(recipients) {
+  const supportAddress = getMailboxAddress("support");
+  if ((recipients || []).some((value) => value === supportAddress)) return "support";
+  return "admin";
+}
+
+function buildThreadSnippet(textBody) {
+  const compact = String(textBody || "").replace(/\s+/g, " ").trim();
+  return compact.slice(0, 240);
+}
 
 function normalizePayoutMethod(method) {
   const normalized = String(method || "").trim().toLowerCase();
@@ -426,6 +479,363 @@ export function markPayoutItemFailed(req, res) {
   return res.json({ ok: true, message: "Marked payout item as failed.", db: nextState });
 }
 
+export function ingestPostmarkInboundEmail(req, res) {
+  const configuredToken = String(env.inboundWebhookToken || "").trim();
+  const providedToken = String(
+    req.get("x-inbound-webhook-token")
+    || req.query?.token
+    || req.body?.token
+    || ""
+  ).trim();
+  if (!configuredToken) {
+    return res.status(503).json({ ok: false, error: "Inbound webhook token is not configured." });
+  }
+  if (!providedToken || providedToken !== configuredToken) {
+    return res.status(403).json({ ok: false, error: "Invalid webhook token." });
+  }
+
+  const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
+  const now = new Date().toISOString();
+  const fromEmail = normalizeEmailValue(req.body?.FromFull?.Email || req.body?.From || req.body?.Sender || "");
+  const fromName = String(req.body?.FromName || req.body?.FromFull?.Name || "").trim();
+  const subject = String(req.body?.Subject || "(No subject)").trim() || "(No subject)";
+  const textBody = String(req.body?.TextBody || req.body?.Text || "").trim();
+  const htmlBody = String(req.body?.HtmlBody || "").trim();
+  const externalMessageId = String(req.body?.MessageID || req.body?.MessageId || "").trim();
+  const externalInReplyTo = String(req.body?.InReplyTo || "").trim();
+  const recipients = parseRecipientEmails(req.body);
+  const mailbox = resolveMailboxFromRecipients(recipients);
+  const mailboxAddress = getMailboxAddress(mailbox);
+
+  if (!fromEmail) {
+    return res.status(400).json({ ok: false, error: "Inbound payload missing sender email." });
+  }
+
+  const existingMessageByExternalId = externalMessageId
+    ? (state.adminEmailMessages || []).find((entry) => entry?.externalMessageId === externalMessageId)
+    : null;
+  if (existingMessageByExternalId) {
+    return res.json({ ok: true, duplicate: true });
+  }
+
+  let targetThread = null;
+  if (externalInReplyTo) {
+    const referencedMessage = (state.adminEmailMessages || []).find((entry) => entry?.externalMessageId === externalInReplyTo);
+    if (referencedMessage) {
+      targetThread = (state.adminEmailThreads || []).find((entry) => entry.id === referencedMessage.threadId) || null;
+    }
+  }
+  if (!targetThread) {
+    targetThread = (state.adminEmailThreads || []).find((entry) => (
+      normalizeMailboxType(entry?.mailbox) === mailbox
+      && normalizeEmailValue(entry?.participantEmail) === fromEmail
+      && String(entry?.status || "open") !== "closed"
+    )) || null;
+  }
+
+  const threadId = targetThread?.id || `email_thread_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const inboundMessageId = `email_msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const nextMessage = {
+    id: inboundMessageId,
+    threadId,
+    mailbox,
+    direction: "inbound",
+    fromEmail,
+    fromName,
+    toEmail: mailboxAddress,
+    subject,
+    text: textBody,
+    html: htmlBody,
+    externalMessageId: externalMessageId || "",
+    externalInReplyTo: externalInReplyTo || "",
+    createdAt: now
+  };
+
+  const baseThread = targetThread || {
+    id: threadId,
+    mailbox,
+    participantEmail: fromEmail,
+    participantName: fromName || fromEmail,
+    status: "open",
+    unreadCount: 0,
+    createdAt: now
+  };
+  const nextThread = {
+    ...baseThread,
+    mailbox,
+    participantEmail: fromEmail,
+    participantName: fromName || baseThread.participantName || fromEmail,
+    status: "open",
+    unreadCount: Number(baseThread.unreadCount || 0) + 1,
+    lastMessageAt: now,
+    lastMessageDirection: "inbound",
+    lastSubject: subject,
+    lastSnippet: buildThreadSnippet(textBody),
+    updatedAt: now
+  };
+
+  const nextState = {
+    ...state,
+    adminEmailThreads: [
+      nextThread,
+      ...(state.adminEmailThreads || []).filter((entry) => entry.id !== threadId)
+    ].slice(0, 2000),
+    adminEmailMessages: [
+      ...(state.adminEmailMessages || []),
+      nextMessage
+    ].slice(-12000)
+  };
+  replaceState(nextState);
+  return res.json({ ok: true, threadId, messageId: inboundMessageId });
+}
+
+export function getAdminEmailInboxThreads(_req, res) {
+  const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
+  const mailboxFilter = String(_req.query?.mailbox || "all").trim().toLowerCase();
+  const statusFilter = String(_req.query?.status || "all").trim().toLowerCase();
+  const search = String(_req.query?.search || "").trim().toLowerCase();
+  const sorted = [...(state.adminEmailThreads || [])].sort(
+    (a, b) => new Date(b.lastMessageAt || b.createdAt || 0).getTime() - new Date(a.lastMessageAt || a.createdAt || 0).getTime()
+  );
+  const filtered = sorted.filter((thread) => {
+    if (mailboxFilter !== "all" && normalizeMailboxType(thread?.mailbox) !== mailboxFilter) return false;
+    if (statusFilter !== "all" && String(thread?.status || "open") !== statusFilter) return false;
+    if (!search) return true;
+    const haystack = [
+      thread?.participantEmail,
+      thread?.participantName,
+      thread?.lastSubject,
+      thread?.lastSnippet
+    ].map((value) => String(value || "").toLowerCase()).join(" ");
+    return haystack.includes(search);
+  });
+  return res.json({ ok: true, threads: filtered });
+}
+
+export function getAdminEmailInboxThreadMessages(req, res) {
+  const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
+  const threadId = String(req.params.threadId || "").trim();
+  if (!threadId) return res.status(400).json({ ok: false, error: "threadId is required." });
+  const thread = (state.adminEmailThreads || []).find((entry) => entry.id === threadId);
+  if (!thread) return res.status(404).json({ ok: false, error: "Email thread not found." });
+  const messages = (state.adminEmailMessages || [])
+    .filter((entry) => entry.threadId === threadId)
+    .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+  return res.json({ ok: true, thread, messages });
+}
+
+export function updateAdminEmailInboxThreadStatus(req, res) {
+  const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
+  const threadId = String(req.params.threadId || "").trim();
+  const status = String(req.body?.status || "").trim();
+  if (!threadId) return res.status(400).json({ ok: false, error: "threadId is required." });
+  if (!EMAIL_INBOX_STATUSES.has(status)) {
+    return res.status(400).json({ ok: false, error: "Invalid status." });
+  }
+  const existingThread = (state.adminEmailThreads || []).find((entry) => entry.id === threadId);
+  if (!existingThread) return res.status(404).json({ ok: false, error: "Email thread not found." });
+  const now = new Date().toISOString();
+  const nextThread = {
+    ...existingThread,
+    status,
+    unreadCount: status === "closed" ? 0 : Number(existingThread.unreadCount || 0),
+    updatedAt: now
+  };
+  const nextState = {
+    ...state,
+    adminEmailThreads: [
+      nextThread,
+      ...(state.adminEmailThreads || []).filter((entry) => entry.id !== threadId)
+    ]
+  };
+  replaceState(nextState);
+  return res.json({ ok: true, thread: nextThread });
+}
+
+export async function replyAdminEmailInboxThread(req, res) {
+  const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
+  const threadId = String(req.params.threadId || "").trim();
+  const body = String(req.body?.body || "").trim();
+  const subjectOverride = String(req.body?.subject || "").trim();
+  if (!threadId || !body) {
+    return res.status(400).json({ ok: false, error: "threadId and body are required." });
+  }
+  const thread = (state.adminEmailThreads || []).find((entry) => entry.id === threadId);
+  if (!thread) return res.status(404).json({ ok: false, error: "Email thread not found." });
+
+  const mailbox = normalizeMailboxType(req.body?.mailbox || thread.mailbox);
+  const fromEmail = getMailboxAddress(mailbox);
+  const toEmail = normalizeEmailValue(req.body?.toEmail || thread.participantEmail);
+  const subject = subjectOverride || String(thread.lastSubject || "Re: Message").trim() || "Re: Message";
+  const toName = String(req.body?.toName || thread.participantName || "").trim();
+  if (!toEmail) {
+    return res.status(400).json({ ok: false, error: "Thread has no recipient email." });
+  }
+
+  const emailResult = await sendPlatformEmail({
+    toEmail,
+    toName,
+    subject,
+    text: body,
+    fromEmail,
+    replyToEmail: fromEmail,
+    includeDoNotReplyNotice: false
+  });
+  if (!emailResult?.delivered) {
+    return res.status(502).json({ ok: false, error: `Could not send reply (${emailResult?.reason || "unknown"}).` });
+  }
+
+  const now = new Date().toISOString();
+  const outboundMessage = {
+    id: `email_msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    threadId,
+    mailbox,
+    direction: "outbound",
+    fromEmail,
+    fromName: "Admin Team",
+    toEmail,
+    toName,
+    subject,
+    text: body,
+    html: "",
+    externalMessageId: "",
+    externalInReplyTo: "",
+    createdAt: now
+  };
+  const nextThread = {
+    ...thread,
+    mailbox,
+    participantEmail: toEmail,
+    participantName: toName || thread.participantName || toEmail,
+    status: "pending_customer",
+    unreadCount: 0,
+    lastMessageAt: now,
+    lastMessageDirection: "outbound",
+    lastSubject: subject,
+    lastSnippet: buildThreadSnippet(body),
+    updatedAt: now
+  };
+  const nextState = {
+    ...state,
+    adminEmailThreads: [
+      nextThread,
+      ...(state.adminEmailThreads || []).filter((entry) => entry.id !== threadId)
+    ].slice(0, 2000),
+    adminEmailMessages: [
+      ...(state.adminEmailMessages || []),
+      outboundMessage
+    ].slice(-12000)
+  };
+  replaceState(nextState);
+  return res.json({
+    ok: true,
+    email: {
+      delivered: emailResult.delivered,
+      mode: emailResult.mode,
+      recipients: emailResult.recipients || [toEmail]
+    },
+    thread: nextThread,
+    message: outboundMessage
+  });
+}
+
+export async function sendAdminEmailInboxMessage(req, res) {
+  const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
+  const mailbox = normalizeMailboxType(req.body?.mailbox);
+  const fromEmail = getMailboxAddress(mailbox);
+  const toEmail = normalizeEmailValue(req.body?.toEmail);
+  const toName = String(req.body?.toName || "").trim();
+  const subject = String(req.body?.subject || "").trim();
+  const body = String(req.body?.body || "").trim();
+
+  if (!toEmail || !subject || !body) {
+    return res.status(400).json({ ok: false, error: "toEmail, subject, and body are required." });
+  }
+  if (!toEmail.includes("@")) {
+    return res.status(400).json({ ok: false, error: "Valid recipient email is required." });
+  }
+
+  const emailResult = await sendPlatformEmail({
+    toEmail,
+    toName,
+    subject,
+    text: body,
+    fromEmail,
+    replyToEmail: fromEmail,
+    includeDoNotReplyNotice: false
+  });
+  if (!emailResult?.delivered) {
+    return res.status(502).json({ ok: false, error: `Could not send email (${emailResult?.reason || "unknown"}).` });
+  }
+
+  const now = new Date().toISOString();
+  const existingThread = (state.adminEmailThreads || []).find((entry) => (
+    normalizeMailboxType(entry?.mailbox) === mailbox
+    && normalizeEmailValue(entry?.participantEmail) === toEmail
+    && String(entry?.status || "open") !== "closed"
+  )) || null;
+  const threadId = existingThread?.id || `email_thread_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const outboundMessage = {
+    id: `email_msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    threadId,
+    mailbox,
+    direction: "outbound",
+    fromEmail,
+    fromName: "Admin Team",
+    toEmail,
+    toName,
+    subject,
+    text: body,
+    html: "",
+    externalMessageId: "",
+    externalInReplyTo: "",
+    createdAt: now
+  };
+  const nextThread = {
+    ...(existingThread || {
+      id: threadId,
+      mailbox,
+      participantEmail: toEmail,
+      participantName: toName || toEmail,
+      status: "pending_customer",
+      unreadCount: 0,
+      createdAt: now
+    }),
+    mailbox,
+    participantEmail: toEmail,
+    participantName: toName || existingThread?.participantName || toEmail,
+    status: "pending_customer",
+    unreadCount: 0,
+    lastMessageAt: now,
+    lastMessageDirection: "outbound",
+    lastSubject: subject,
+    lastSnippet: buildThreadSnippet(body),
+    updatedAt: now
+  };
+  const nextState = {
+    ...state,
+    adminEmailThreads: [
+      nextThread,
+      ...(state.adminEmailThreads || []).filter((entry) => entry.id !== threadId)
+    ].slice(0, 2000),
+    adminEmailMessages: [
+      ...(state.adminEmailMessages || []),
+      outboundMessage
+    ].slice(-12000)
+  };
+  replaceState(nextState);
+  return res.json({
+    ok: true,
+    email: {
+      delivered: emailResult.delivered,
+      mode: emailResult.mode,
+      recipients: emailResult.recipients || [toEmail]
+    },
+    thread: nextThread,
+    message: outboundMessage
+  });
+}
+
 export function getProducts(_req, res) {
   res.json({ products: getState().products || [] });
 }
@@ -685,11 +1095,27 @@ export async function notifyPlatformEmail(req, res, next) {
       return res.status(400).json({ error: "toEmail, subject, and text are required." });
     }
 
+    const fromEmail = String(req.body?.fromEmail || "").trim().toLowerCase();
+    const replyToEmail = String(req.body?.replyToEmail || "").trim().toLowerCase();
+    const allowedFromEmails = new Set([
+      String(env.smtpFrom || "").trim().toLowerCase(),
+      String(env.supportInboxEmail || "").trim().toLowerCase(),
+      String(env.adminInboxEmail || "").trim().toLowerCase()
+    ].filter(Boolean));
+    if (fromEmail && !allowedFromEmails.has(fromEmail)) {
+      return res.status(400).json({ error: "fromEmail is not an allowed sender." });
+    }
+    if (replyToEmail && !allowedFromEmails.has(replyToEmail)) {
+      return res.status(400).json({ error: "replyToEmail is not an allowed sender." });
+    }
+
     const result = await sendPlatformEmail({
       toEmail,
       toName,
       subject,
-      text
+      text,
+      fromEmail: fromEmail || undefined,
+      replyToEmail: replyToEmail || undefined
     });
     const adminUserId = req.auth?.user?.id || null;
     if (adminUserId) {

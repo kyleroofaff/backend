@@ -14,6 +14,8 @@ import {
   deleteProduct,
   deleteSellerPost,
   getBootstrap,
+  getAdminEmailInboxThreadMessages,
+  getAdminEmailInboxThreads,
   getPostReports,
   getProducts,
   getSellerPosts,
@@ -31,9 +33,13 @@ import {
   updatePromptPayReceiver,
   createMonthlyPayoutRun,
   markPayoutItemSent,
+  ingestPostmarkInboundEmail,
   markPayoutItemFailed,
   walletTopUp,
-  walletReconciliation
+  walletReconciliation,
+  replyAdminEmailInboxThread,
+  sendAdminEmailInboxMessage,
+  updateAdminEmailInboxThreadStatus
 } from "../controllers/marketplaceController.js";
 import { requireAuth, requireNonProduction, requireRole } from "../middlewares/auth.js";
 import { rejectUnknownBodyKeys, strictAuthRateLimit } from "../middlewares/security.js";
@@ -62,11 +68,17 @@ router.post("/seller-posts/:postId/report", requireAuth, requireRole("buyer", "s
 router.get("/seller-post-reports", requireAuth, requireRole("admin"), getPostReports);
 router.post("/seller-post-reports/:reportId/resolve", requireAuth, requireRole("admin"), idempotencyOptional, resolvePostReport);
 router.post("/notifications/seller-approval-request", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["sellerName", "sellerEmail", "requestedAt"]), notifySellerApprovalRequest);
-router.post("/notifications/platform-email", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["toEmail", "toName", "subject", "text", "templateKey", "actionUrl"]), notifyPlatformEmail);
+router.post("/notifications/platform-email", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["toEmail", "toName", "subject", "text", "templateKey", "actionUrl", "fromEmail", "replyToEmail"]), notifyPlatformEmail);
+router.post("/webhooks/postmark/inbound", ingestPostmarkInboundEmail);
 router.post("/admin/site-settings/promptpay", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["promptPayReceiverMobile"]), updatePromptPayReceiver);
 router.post("/admin/payout-runs/monthly", requireAuth, requireRole("admin"), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["monthValue", "notes"]), createMonthlyPayoutRun);
 router.post("/admin/payout-items/:payoutItemId/sent", requireAuth, requireRole("admin"), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["method", "externalReference", "notes"]), markPayoutItemSent);
 router.post("/admin/payout-items/:payoutItemId/failed", requireAuth, requireRole("admin"), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["reason"]), markPayoutItemFailed);
+router.get("/admin/email-inbox/threads", requireAuth, requireRole("admin"), getAdminEmailInboxThreads);
+router.get("/admin/email-inbox/threads/:threadId/messages", requireAuth, requireRole("admin"), getAdminEmailInboxThreadMessages);
+router.post("/admin/email-inbox/send", requireAuth, requireRole("admin"), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["mailbox", "toEmail", "toName", "subject", "body"]), sendAdminEmailInboxMessage);
+router.post("/admin/email-inbox/threads/:threadId/reply", requireAuth, requireRole("admin"), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["mailbox", "toEmail", "toName", "subject", "body"]), replyAdminEmailInboxThread);
+router.post("/admin/email-inbox/threads/:threadId/status", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["status"]), updateAdminEmailInboxThreadStatus);
 router.post("/translate", requireAuth, idempotencyOptional, rejectUnknownBodyKeys(["text", "targetLang"]), translateText);
 router.get("/reconciliation/wallet", requireAuth, requireRole("admin"), walletReconciliation);
 router.post(
