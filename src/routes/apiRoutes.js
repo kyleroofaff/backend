@@ -4,6 +4,7 @@ import {
   me,
   register,
   resendVerificationEmail,
+  updateUserAdminAccessBySuperAdmin,
   updateOwnCredentials,
   updateUserCredentialsByAdmin,
   verifyEmail
@@ -49,7 +50,14 @@ import {
   sendAdminEmailInboxMessage,
   updateAdminEmailInboxThreadStatus
 } from "../controllers/marketplaceController.js";
-import { requireAuth, requireNonProduction, requireRole } from "../middlewares/auth.js";
+import {
+  ADMIN_SCOPES,
+  requireAdminScope,
+  requireAuth,
+  requireNonProduction,
+  requireRole,
+  requireSuperAdmin
+} from "../middlewares/auth.js";
 import { rejectUnknownBodyKeys, strictAuthRateLimit } from "../middlewares/security.js";
 import { idempotencyOptional, requireIdempotencyKey } from "../middlewares/idempotency.js";
 
@@ -87,17 +95,25 @@ router.post(
 router.post(
   "/admin/users/:userId/credentials",
   requireAuth,
-  requireRole("admin"),
+  requireAdminScope(ADMIN_SCOPES.USERS_CREDENTIALS_MANAGE),
   idempotencyOptional,
   rejectUnknownBodyKeys(["newEmail", "newPassword"]),
   updateUserCredentialsByAdmin
+);
+router.post(
+  "/admin/users/:userId/admin-access",
+  requireAuth,
+  requireSuperAdmin,
+  idempotencyOptional,
+  rejectUnknownBodyKeys(["enabled", "scopes"]),
+  updateUserAdminAccessBySuperAdmin
 );
 router.post("/push/subscribe", requireAuth, rejectUnknownBodyKeys(["subscription"]), subscribePush);
 router.post("/push/unsubscribe", requireAuth, rejectUnknownBodyKeys(["endpoint"]), unsubscribePush);
 router.post("/push/preferences", requireAuth, rejectUnknownBodyKeys(["push"]), updatePushPreferences);
 router.get("/bootstrap", getBootstrap);
-router.post("/state", requireAuth, requireRole("admin"), requireNonProduction, idempotencyOptional, rejectUnknownBodyKeys(["db"]), saveState);
-router.post("/reset", requireAuth, requireRole("admin"), requireNonProduction, idempotencyOptional, reset);
+router.post("/state", requireAuth, requireSuperAdmin, requireNonProduction, idempotencyOptional, rejectUnknownBodyKeys(["db"]), saveState);
+router.post("/reset", requireAuth, requireSuperAdmin, requireNonProduction, idempotencyOptional, reset);
 router.get("/products", getProducts);
 router.delete("/products/:productId", requireAuth, requireRole("seller", "admin"), idempotencyOptional, rejectUnknownBodyKeys(["productTitle"]), deleteProduct);
 router.get("/sellers", getSellers);
@@ -105,22 +121,22 @@ router.get("/seller-posts", getSellerPosts);
 router.post("/seller-posts", requireAuth, requireRole("seller"), idempotencyOptional, rejectUnknownBodyKeys(["image", "imageName", "caption", "captionI18n", "visibility", "accessPriceUsd"]), createSellerPost);
 router.delete("/seller-posts/:postId", requireAuth, requireRole("seller", "admin"), idempotencyOptional, deleteSellerPost);
 router.post("/seller-posts/:postId/report", requireAuth, requireRole("buyer", "seller", "admin"), idempotencyOptional, rejectUnknownBodyKeys(["reason"]), reportSellerPost);
-router.get("/seller-post-reports", requireAuth, requireRole("admin"), getPostReports);
-router.post("/seller-post-reports/:reportId/resolve", requireAuth, requireRole("admin"), idempotencyOptional, resolvePostReport);
-router.post("/notifications/seller-approval-request", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["sellerName", "sellerEmail", "requestedAt"]), notifySellerApprovalRequest);
-router.post("/notifications/platform-email", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["toEmail", "toName", "subject", "text", "body", "templateKey", "actionUrl", "fromEmail", "replyToEmail"]), notifyPlatformEmail);
+router.get("/seller-post-reports", requireAuth, requireAdminScope(ADMIN_SCOPES.PRODUCTS_MODERATE), getPostReports);
+router.post("/seller-post-reports/:reportId/resolve", requireAuth, requireAdminScope(ADMIN_SCOPES.PRODUCTS_MODERATE), idempotencyOptional, resolvePostReport);
+router.post("/notifications/seller-approval-request", requireAuth, requireAdminScope(ADMIN_SCOPES.AUTH_REVIEW), idempotencyOptional, rejectUnknownBodyKeys(["sellerName", "sellerEmail", "requestedAt"]), notifySellerApprovalRequest);
+router.post("/notifications/platform-email", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), idempotencyOptional, rejectUnknownBodyKeys(["toEmail", "toName", "subject", "text", "body", "templateKey", "actionUrl", "fromEmail", "replyToEmail"]), notifyPlatformEmail);
 router.post("/webhooks/postmark/inbound", ingestPostmarkInboundEmail);
-router.post("/admin/site-settings/promptpay", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["promptPayReceiverMobile"]), updatePromptPayReceiver);
-router.post("/admin/payout-runs/monthly", requireAuth, requireRole("admin"), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["monthValue", "notes"]), createMonthlyPayoutRun);
-router.post("/admin/payout-items/:payoutItemId/sent", requireAuth, requireRole("admin"), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["method", "externalReference", "notes"]), markPayoutItemSent);
-router.post("/admin/payout-items/:payoutItemId/failed", requireAuth, requireRole("admin"), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["reason"]), markPayoutItemFailed);
-router.get("/admin/email-inbox/threads", requireAuth, requireRole("admin"), getAdminEmailInboxThreads);
-router.get("/admin/email-inbox/threads/:threadId/messages", requireAuth, requireRole("admin"), getAdminEmailInboxThreadMessages);
-router.post("/admin/email-inbox/send", requireAuth, requireRole("admin"), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["mailbox", "toEmail", "toName", "subject", "body"]), sendAdminEmailInboxMessage);
-router.post("/admin/email-inbox/threads/:threadId/reply", requireAuth, requireRole("admin"), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["mailbox", "toEmail", "toName", "subject", "body"]), replyAdminEmailInboxThread);
-router.post("/admin/email-inbox/threads/:threadId/status", requireAuth, requireRole("admin"), idempotencyOptional, rejectUnknownBodyKeys(["status"]), updateAdminEmailInboxThreadStatus);
+router.post("/admin/site-settings/promptpay", requireAuth, requireAdminScope(ADMIN_SCOPES.PAYMENTS_MANAGE), idempotencyOptional, rejectUnknownBodyKeys(["promptPayReceiverMobile"]), updatePromptPayReceiver);
+router.post("/admin/payout-runs/monthly", requireAuth, requireAdminScope(ADMIN_SCOPES.PAYMENTS_MANAGE), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["monthValue", "notes"]), createMonthlyPayoutRun);
+router.post("/admin/payout-items/:payoutItemId/sent", requireAuth, requireAdminScope(ADMIN_SCOPES.PAYMENTS_MANAGE), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["method", "externalReference", "notes"]), markPayoutItemSent);
+router.post("/admin/payout-items/:payoutItemId/failed", requireAuth, requireAdminScope(ADMIN_SCOPES.PAYMENTS_MANAGE), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["reason"]), markPayoutItemFailed);
+router.get("/admin/email-inbox/threads", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), getAdminEmailInboxThreads);
+router.get("/admin/email-inbox/threads/:threadId/messages", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), getAdminEmailInboxThreadMessages);
+router.post("/admin/email-inbox/send", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["mailbox", "toEmail", "toName", "subject", "body"]), sendAdminEmailInboxMessage);
+router.post("/admin/email-inbox/threads/:threadId/reply", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["mailbox", "toEmail", "toName", "subject", "body"]), replyAdminEmailInboxThread);
+router.post("/admin/email-inbox/threads/:threadId/status", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), idempotencyOptional, rejectUnknownBodyKeys(["status"]), updateAdminEmailInboxThreadStatus);
 router.post("/translate", requireAuth, idempotencyOptional, rejectUnknownBodyKeys(["text", "targetLang"]), translateText);
-router.get("/reconciliation/wallet", requireAuth, requireRole("admin"), walletReconciliation);
+router.get("/reconciliation/wallet", requireAuth, requireAdminScope(ADMIN_SCOPES.PAYMENTS_MANAGE), walletReconciliation);
 router.post(
   "/messages/buyer-send",
   requireAuth,

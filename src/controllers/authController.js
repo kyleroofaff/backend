@@ -6,6 +6,7 @@ import {
   getUserById,
   getUserByEmail,
   setUserEmailVerificationToken,
+  updateUserAdminAccessById,
   updateUserCredentialsById,
   verifyUserEmailToken
 } from "../repositories/userRepository.js";
@@ -13,6 +14,17 @@ import { sendPlatformEmail, sendSellerApprovalRequestEmail } from "../services/m
 import { hashPassword, verifyPassword } from "../utils/password.js";
 
 function sanitizeUser(user) {
+  const rawAdminAccess = user?.adminAccess && typeof user.adminAccess === "object" ? user.adminAccess : {};
+  const role = String(user?.role || "").trim().toLowerCase();
+  const adminAccess = role === "admin"
+    ? { enabled: true, level: "super", scopes: ["*"] }
+    : {
+        enabled: rawAdminAccess.enabled === true,
+        level: rawAdminAccess.level === "super" ? "super" : (rawAdminAccess.enabled === true ? "limited" : "none"),
+        scopes: Array.isArray(rawAdminAccess.scopes)
+          ? rawAdminAccess.scopes.map((scope) => String(scope || "").trim()).filter(Boolean)
+          : []
+      };
   return {
     id: user.id,
     email: user.email,
@@ -21,7 +33,10 @@ function sanitizeUser(user) {
     sellerId: user.sellerId || null,
     barId: user.barId || null,
     accountStatus: user.accountStatus || "active",
-    emailVerified: user.emailVerified !== false
+    emailVerified: user.emailVerified !== false,
+    adminAccess,
+    isSuperAdmin: adminAccess.level === "super",
+    hasAdminAccess: adminAccess.enabled === true || adminAccess.level === "super",
   };
 }
 
@@ -405,6 +420,45 @@ export async function updateUserCredentialsByAdmin(req, res, next) {
       }
       throw error;
     }
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function updateUserAdminAccessBySuperAdmin(req, res, next) {
+  try {
+    const requesterRole = String(req.auth?.user?.role || "").trim().toLowerCase();
+    const requesterIsSuper = requesterRole === "admin" || req.auth?.user?.isSuperAdmin === true;
+    if (!requesterIsSuper) {
+      return res.status(403).json({ error: "Super admin access is required." });
+    }
+    const targetUserId = String(req.params?.userId || "").trim();
+    const enabled = req.body?.enabled === true;
+    const scopes = Array.isArray(req.body?.scopes) ? req.body.scopes : [];
+    if (!targetUserId) {
+      return res.status(400).json({ error: "userId is required." });
+    }
+    const target = await getUserById(targetUserId);
+    if (!target) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    const targetRole = String(target.role || "").trim().toLowerCase();
+    if (!["seller", "bar"].includes(targetRole)) {
+      return res.status(400).json({ error: "Admin access can only be assigned to seller or bar accounts." });
+    }
+    const updated = await updateUserAdminAccessById(targetUserId, {
+      enabled,
+      level: enabled ? "limited" : "none",
+      scopes
+    });
+    if (!updated) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    return res.json({
+      ok: true,
+      message: enabled ? "Delegated admin access updated." : "Delegated admin access removed.",
+      user: sanitizeUser(updated)
+    });
   } catch (error) {
     return next(error);
   }

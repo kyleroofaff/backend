@@ -1,6 +1,21 @@
 import { getState, replaceStateAndSeed } from "../db/store.js";
 import { hasPostgresConfig, pgQuery } from "../db/postgres.js";
 
+const KNOWN_ADMIN_SCOPES = new Set([
+  "sales.read",
+  "payments.manage",
+  "affiliations.manage",
+  "disputes.review",
+  "users.block",
+  "users.admin_access.manage",
+  "users.credentials.manage",
+  "email.inbox.manage",
+  "email.templates.manage",
+  "auth.review",
+  "products.moderate",
+  "cms.manage",
+]);
+
 function normalizeNotificationPreferences(rawPreferences = {}, role = "") {
   const base = {
     message: rawPreferences?.message !== false,
@@ -16,6 +31,44 @@ function normalizeNotificationPreferences(rawPreferences = {}, role = "") {
   return {
     ...base,
     push: basePush
+  };
+}
+
+function normalizeAdminAccess(rawAdminAccess = {}, role = "") {
+  const normalizedRole = String(role || "").trim().toLowerCase();
+  if (normalizedRole === "admin") {
+    return {
+      enabled: true,
+      level: "super",
+      scopes: ["*"],
+    };
+  }
+  const raw = rawAdminAccess && typeof rawAdminAccess === "object" ? rawAdminAccess : {};
+  const enabled = raw.enabled === true;
+  if (!enabled) {
+    return {
+      enabled: false,
+      level: "none",
+      scopes: [],
+    };
+  }
+  const level = raw.level === "super" ? "super" : "limited";
+  if (level === "super") {
+    return {
+      enabled: true,
+      level: "super",
+      scopes: ["*"],
+    };
+  }
+  const scopes = Array.isArray(raw.scopes)
+    ? raw.scopes
+        .map((entry) => String(entry || "").trim())
+        .filter((scope) => KNOWN_ADMIN_SCOPES.has(scope))
+    : [];
+  return {
+    enabled: true,
+    level: "limited",
+    scopes,
   };
 }
 
@@ -40,6 +93,7 @@ function mapPostgresUser(row) {
   const profile = parseProfile(row.profile);
   const role = row.role || "";
   const emailVerified = profile.emailVerified !== false;
+  const adminAccess = normalizeAdminAccess(profile.adminAccess || {}, role);
   return {
     id: row.id,
     email: row.email,
@@ -50,6 +104,7 @@ function mapPostgresUser(row) {
     accountStatus: row.account_status || "active",
     passwordHash: row.password_hash || "",
     emailVerified,
+    adminAccess,
     preferredLanguage: normalizePreferredLanguage(profile.preferredLanguage),
     notificationPreferences: normalizeNotificationPreferences(profile.notificationPreferences || {}, role)
   };
@@ -58,10 +113,12 @@ function mapPostgresUser(row) {
 function mapStateUser(user) {
   if (!user) return null;
   const role = String(user.role || "");
+  const adminAccess = normalizeAdminAccess(user.adminAccess || {}, role);
   return {
     ...user,
     passwordHash: String(user.password || ""),
     emailVerified: user.emailVerified !== false,
+    adminAccess,
     preferredLanguage: normalizePreferredLanguage(user.preferredLanguage),
     notificationPreferences: normalizeNotificationPreferences(user.notificationPreferences || {}, role)
   };
@@ -195,7 +252,11 @@ export async function createUser({
   }
 
   if (hasPostgresConfig()) {
-    const nextProfile = profile && typeof profile === "object" ? profile : {};
+    const nextProfileInput = profile && typeof profile === "object" ? profile : {};
+    const nextProfile = {
+      ...nextProfileInput,
+      adminAccess: normalizeAdminAccess(nextProfileInput.adminAccess || {}, normalizedRole)
+    };
     const result = await pgQuery(
       `INSERT INTO app_users (id, email, name, role, seller_id, bar_id, account_status, password_hash, profile)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
@@ -223,6 +284,7 @@ export async function createUser({
     throw new Error("Email already exists.");
   }
   const nextProfile = profile && typeof profile === "object" ? profile : {};
+  const normalizedAdminAccess = normalizeAdminAccess(nextProfile.adminAccess || {}, normalizedRole);
   const nextUser = {
     id: normalizedId,
     email: normalizedEmail,
@@ -235,6 +297,7 @@ export async function createUser({
     emailVerified: nextProfile.emailVerified !== false,
     emailVerificationToken: String(nextProfile.emailVerificationToken || ""),
     emailVerificationExpiresAt: String(nextProfile.emailVerificationExpiresAt || ""),
+    adminAccess: normalizedAdminAccess,
     preferredLanguage: normalizePreferredLanguage(nextProfile.preferredLanguage),
     notificationPreferences: normalizeNotificationPreferences(nextProfile.notificationPreferences || {}, normalizedRole)
   };
@@ -244,6 +307,69 @@ export async function createUser({
   };
   await replaceStateAndSeed(nextState);
   return mapStateUser(nextUser);
+}
+
+export async function updateUserAdminAccessById(userId, adminAccess = {}) {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) return null;
+  const enabled = adminAccess?.enabled === true;
+  const nextLevel = adminAccess?.level === "super" ? "super" : "limited";
+  const nextScopes = Array.isArray(adminAccess?.scopes)
+    ? adminAccess.scopes
+        .map((entry) => String(entry || "").trim())
+        .filter((scope) => KNOWN_ADMIN_SCOPES.has(scope))
+    : [];
+
+  if (hasPostgresConfig()) {
+    const currentResult = await pgQuery(
+      `SELECT id, role, profile
+       FROM app_users
+       WHERE id = $1
+       LIMIT 1`,
+      [normalizedUserId]
+    );
+    const row = currentResult.rows[0];
+    if (!row) return null;
+    const profile = parseProfile(row.profile);
+    profile.adminAccess = normalizeAdminAccess(
+      enabled
+        ? { enabled: true, level: nextLevel, scopes: nextScopes }
+        : { enabled: false, level: "none", scopes: [] },
+      row.role || ""
+    );
+    await pgQuery(
+      `UPDATE app_users
+       SET profile = $2::jsonb,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [normalizedUserId, JSON.stringify(profile)]
+    );
+    return getUserById(normalizedUserId);
+  }
+
+  const state = getState();
+  const users = Array.isArray(state.users) ? state.users : [];
+  const existing = users.find((entry) => entry.id === normalizedUserId);
+  if (!existing) return null;
+  const normalized = normalizeAdminAccess(
+    enabled
+      ? { enabled: true, level: nextLevel, scopes: nextScopes }
+      : { enabled: false, level: "none", scopes: [] },
+    existing.role || ""
+  );
+  const nextState = {
+    ...state,
+    users: users.map((entry) => (
+      entry.id === normalizedUserId
+        ? {
+            ...entry,
+            adminAccess: normalized,
+          }
+        : entry
+    ))
+  };
+  await replaceStateAndSeed(nextState);
+  return getUserById(normalizedUserId);
 }
 
 export async function verifyUserEmailToken(email, token) {
