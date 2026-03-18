@@ -1,5 +1,13 @@
 import { Router } from "express";
-import { login, me, register, resendVerificationEmail, verifyEmail } from "../controllers/authController.js";
+import {
+  login,
+  me,
+  register,
+  resendVerificationEmail,
+  updateOwnCredentials,
+  updateUserCredentialsByAdmin,
+  verifyEmail
+} from "../controllers/authController.js";
 import {
   pushConfig,
   subscribePush,
@@ -70,6 +78,20 @@ router.post(
 router.post("/auth/verify-email", strictAuthRateLimit, rejectUnknownBodyKeys(["email", "token"]), verifyEmail);
 router.post("/auth/resend-verification", strictAuthRateLimit, rejectUnknownBodyKeys(["email"]), resendVerificationEmail);
 router.get("/auth/me", requireAuth, me);
+router.post(
+  "/auth/account-credentials",
+  requireAuth,
+  rejectUnknownBodyKeys(["currentPassword", "newEmail", "newPassword"]),
+  updateOwnCredentials
+);
+router.post(
+  "/admin/users/:userId/credentials",
+  requireAuth,
+  requireRole("admin"),
+  idempotencyOptional,
+  rejectUnknownBodyKeys(["newEmail", "newPassword"]),
+  updateUserCredentialsByAdmin
+);
 router.post("/push/subscribe", requireAuth, rejectUnknownBodyKeys(["subscription"]), subscribePush);
 router.post("/push/unsubscribe", requireAuth, rejectUnknownBodyKeys(["endpoint"]), unsubscribePush);
 router.post("/push/preferences", requireAuth, rejectUnknownBodyKeys(["push"]), updatePushPreferences);

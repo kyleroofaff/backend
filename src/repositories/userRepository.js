@@ -107,6 +107,73 @@ export async function getUserById(id) {
   return mapStateUser(user);
 }
 
+export async function updateUserCredentialsById(userId, { email, passwordHash } = {}) {
+  const normalizedUserId = String(userId || "").trim();
+  const nextEmail = String(email || "").trim().toLowerCase();
+  const nextPasswordHash = String(passwordHash || "").trim();
+  const shouldUpdateEmail = Boolean(nextEmail);
+  const shouldUpdatePassword = Boolean(nextPasswordHash);
+  if (!normalizedUserId || (!shouldUpdateEmail && !shouldUpdatePassword)) {
+    return null;
+  }
+
+  if (hasPostgresConfig()) {
+    if (shouldUpdateEmail) {
+      const duplicateResult = await pgQuery(
+        `SELECT id
+         FROM app_users
+         WHERE lower(email) = $1
+           AND id <> $2
+         LIMIT 1`,
+        [nextEmail, normalizedUserId]
+      );
+      if (duplicateResult.rows[0]) {
+        throw new Error("Email already exists.");
+      }
+    }
+    const result = await pgQuery(
+      `UPDATE app_users
+       SET email = CASE WHEN $2::text <> '' THEN $2 ELSE email END,
+           password_hash = CASE WHEN $3::text <> '' THEN $3 ELSE password_hash END,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, email, name, role, seller_id, bar_id, account_status, password_hash, profile`,
+      [normalizedUserId, nextEmail, nextPasswordHash]
+    );
+    return mapPostgresUser(result.rows[0] || null);
+  }
+
+  const state = getState();
+  const users = Array.isArray(state.users) ? state.users : [];
+  const existingUser = users.find((entry) => entry.id === normalizedUserId);
+  if (!existingUser) return null;
+  if (shouldUpdateEmail) {
+    const duplicate = users.some(
+      (entry) => (
+        entry.id !== normalizedUserId
+        && String(entry?.email || "").trim().toLowerCase() === nextEmail
+      )
+    );
+    if (duplicate) {
+      throw new Error("Email already exists.");
+    }
+  }
+  const nextState = {
+    ...state,
+    users: users.map((entry) => (
+      entry.id === normalizedUserId
+        ? {
+            ...entry,
+            ...(shouldUpdateEmail ? { email: nextEmail } : {}),
+            ...(shouldUpdatePassword ? { password: nextPasswordHash } : {})
+          }
+        : entry
+    ))
+  };
+  await replaceStateAndSeed(nextState);
+  return getUserById(normalizedUserId);
+}
+
 export async function createUser({
   id,
   email,

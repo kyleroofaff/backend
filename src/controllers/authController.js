@@ -3,8 +3,10 @@ import { env } from "../config/env.js";
 import { buildAuthPayload, signAuthToken } from "../middlewares/auth.js";
 import {
   createUser,
+  getUserById,
   getUserByEmail,
   setUserEmailVerificationToken,
+  updateUserCredentialsById,
   verifyUserEmailToken
 } from "../repositories/userRepository.js";
 import { sendPlatformEmail, sendSellerApprovalRequestEmail } from "../services/mailer.js";
@@ -84,6 +86,16 @@ function getDefaultNotificationPreferences(role) {
   };
 }
 
+function getPasswordPolicyError(password) {
+  const value = String(password || "");
+  const hasPasswordNumber = /\d/.test(value);
+  const hasPasswordSymbol = /[^A-Za-z0-9]/.test(value);
+  if (value.length < 8 || !hasPasswordNumber || !hasPasswordSymbol) {
+    return "Password must be at least 8 characters and include at least 1 number and 1 symbol.";
+  }
+  return "";
+}
+
 async function sendVerificationEmail({ email, name, token }) {
   const verifyUrl = buildVerifyUrl(email, token);
   return sendPlatformEmail({
@@ -155,10 +167,9 @@ export async function register(req, res, next) {
     if (!email.includes("@")) {
       return res.status(400).json({ error: "A valid email address is required." });
     }
-    const hasPasswordNumber = /\d/.test(password);
-    const hasPasswordSymbol = /[^A-Za-z0-9]/.test(password);
-    if (password.length < 8 || !hasPasswordNumber || !hasPasswordSymbol) {
-      return res.status(400).json({ error: "Password must be at least 8 characters and include at least 1 number and 1 symbol." });
+    const passwordPolicyError = getPasswordPolicyError(password);
+    if (passwordPolicyError) {
+      return res.status(400).json({ error: passwordPolicyError });
     }
     if ((role === "seller" || role === "bar") && (!city || !country)) {
       return res.status(400).json({ error: "city and country are required for seller and bar accounts." });
@@ -294,6 +305,106 @@ export async function resendVerificationEmail(req, res, next) {
       ok: true,
       message: "Verification email sent. Please check your inbox."
     });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function updateOwnCredentials(req, res, next) {
+  try {
+    const userId = String(req.auth?.user?.id || "").trim();
+    const currentPassword = String(req.body?.currentPassword || "");
+    const newEmail = String(req.body?.newEmail || "").trim().toLowerCase();
+    const newPassword = String(req.body?.newPassword || "");
+    if (!userId) {
+      return res.status(401).json({ error: "Authentication required." });
+    }
+    if (!currentPassword) {
+      return res.status(400).json({ error: "Current password is required." });
+    }
+    if (!newEmail && !newPassword) {
+      return res.status(400).json({ error: "Provide a new email or new password." });
+    }
+    if (newEmail && !newEmail.includes("@")) {
+      return res.status(400).json({ error: "A valid email address is required." });
+    }
+    const passwordPolicyError = newPassword ? getPasswordPolicyError(newPassword) : "";
+    if (passwordPolicyError) {
+      return res.status(400).json({ error: passwordPolicyError });
+    }
+
+    const user = await getUserById(userId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    if (!verifyPassword(currentPassword, user.passwordHash || "")) {
+      return res.status(403).json({ error: "Current password is incorrect." });
+    }
+    try {
+      const updated = await updateUserCredentialsById(userId, {
+        email: newEmail || undefined,
+        passwordHash: newPassword ? hashPassword(newPassword) : undefined
+      });
+      if (!updated) {
+        return res.status(404).json({ error: "User not found." });
+      }
+      return res.json({
+        ok: true,
+        message: "Account credentials updated.",
+        user: sanitizeUser(updated)
+      });
+    } catch (error) {
+      if (String(error?.message || "").toLowerCase().includes("email already exists")) {
+        return res.status(409).json({ error: "This email is already registered." });
+      }
+      throw error;
+    }
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function updateUserCredentialsByAdmin(req, res, next) {
+  try {
+    const targetUserId = String(req.params?.userId || "").trim();
+    const newEmail = String(req.body?.newEmail || "").trim().toLowerCase();
+    const newPassword = String(req.body?.newPassword || "");
+    if (!targetUserId) {
+      return res.status(400).json({ error: "userId is required." });
+    }
+    if (!newEmail && !newPassword) {
+      return res.status(400).json({ error: "Provide a new email or new password." });
+    }
+    if (newEmail && !newEmail.includes("@")) {
+      return res.status(400).json({ error: "A valid email address is required." });
+    }
+    const passwordPolicyError = newPassword ? getPasswordPolicyError(newPassword) : "";
+    if (passwordPolicyError) {
+      return res.status(400).json({ error: passwordPolicyError });
+    }
+    const existing = await getUserById(targetUserId);
+    if (!existing) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    try {
+      const updated = await updateUserCredentialsById(targetUserId, {
+        email: newEmail || undefined,
+        passwordHash: newPassword ? hashPassword(newPassword) : undefined
+      });
+      if (!updated) {
+        return res.status(404).json({ error: "User not found." });
+      }
+      return res.json({
+        ok: true,
+        message: "User credentials updated.",
+        user: sanitizeUser(updated)
+      });
+    } catch (error) {
+      if (String(error?.message || "").toLowerCase().includes("email already exists")) {
+        return res.status(409).json({ error: "This email is already registered." });
+      }
+      throw error;
+    }
   } catch (error) {
     return next(error);
   }
