@@ -155,8 +155,10 @@ export async function register(req, res, next) {
     if (!email.includes("@")) {
       return res.status(400).json({ error: "A valid email address is required." });
     }
-    if (password.length < 6) {
-      return res.status(400).json({ error: "Password must be at least 6 characters." });
+    const hasPasswordNumber = /\d/.test(password);
+    const hasPasswordSymbol = /[^A-Za-z0-9]/.test(password);
+    if (password.length < 8 || !hasPasswordNumber || !hasPasswordSymbol) {
+      return res.status(400).json({ error: "Password must be at least 8 characters and include at least 1 number and 1 symbol." });
     }
     if ((role === "seller" || role === "bar") && (!city || !country)) {
       return res.status(400).json({ error: "city and country are required for seller and bar accounts." });
