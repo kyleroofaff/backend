@@ -1,6 +1,14 @@
+import crypto from "node:crypto";
+import { env } from "../config/env.js";
 import { buildAuthPayload, signAuthToken } from "../middlewares/auth.js";
-import { getUserByEmail } from "../repositories/userRepository.js";
-import { verifyPassword } from "../utils/password.js";
+import {
+  createUser,
+  getUserByEmail,
+  setUserEmailVerificationToken,
+  verifyUserEmailToken
+} from "../repositories/userRepository.js";
+import { sendPlatformEmail, sendSellerApprovalRequestEmail } from "../services/mailer.js";
+import { hashPassword, verifyPassword } from "../utils/password.js";
 
 function sanitizeUser(user) {
   return {
@@ -10,7 +18,8 @@ function sanitizeUser(user) {
     role: user.role,
     sellerId: user.sellerId || null,
     barId: user.barId || null,
-    accountStatus: user.accountStatus || "active"
+    accountStatus: user.accountStatus || "active",
+    emailVerified: user.emailVerified !== false
   };
 }
 
@@ -21,6 +30,76 @@ function getBlockedStatusError(user) {
   if (user.role === "seller" && user.accountStatus === "pending") return "This seller account is pending approval.";
   if (user.accountStatus && user.accountStatus !== "active") return "This account is not active.";
   return "";
+}
+
+function emailVerificationRequiredForRole(role) {
+  return ["buyer", "seller", "bar"].includes(String(role || "").trim().toLowerCase());
+}
+
+function getEmailVerificationError(user) {
+  if (!user) return "Invalid email or password.";
+  if (!emailVerificationRequiredForRole(user.role)) return "";
+  if (user.emailVerified !== false) return "";
+  return "Please verify your email before logging in.";
+}
+
+function normalizeRole(role) {
+  const normalized = String(role || "").trim().toLowerCase();
+  return ["buyer", "seller", "bar"].includes(normalized) ? normalized : "";
+}
+
+function buildSlug(value, fallback) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    || fallback;
+}
+
+function getPrimaryClientOrigin() {
+  return String(env.clientOrigin || "")
+    .split(",")
+    .map((value) => value.trim())
+    .find(Boolean)
+    || "http://localhost:5173";
+}
+
+function buildVerifyUrl(email, token) {
+  const origin = getPrimaryClientOrigin().replace(/\/+$/g, "");
+  const encodedEmail = encodeURIComponent(String(email || "").trim().toLowerCase());
+  const encodedToken = encodeURIComponent(String(token || "").trim());
+  return `${origin}/verify-email?email=${encodedEmail}&token=${encodedToken}`;
+}
+
+function getDefaultNotificationPreferences(role) {
+  const sellerOrBar = role === "seller" || role === "bar";
+  return {
+    message: true,
+    engagement: true,
+    push: {
+      message: sellerOrBar,
+      engagement: sellerOrBar
+    }
+  };
+}
+
+async function sendVerificationEmail({ email, name, token }) {
+  const verifyUrl = buildVerifyUrl(email, token);
+  return sendPlatformEmail({
+    toEmail: email,
+    toName: name,
+    subject: "Verify your email address",
+    text: [
+      `Hi ${name},`,
+      "",
+      "Please verify your email to complete registration.",
+      verifyUrl,
+      "",
+      "This link expires in 24 hours."
+    ].join("\n"),
+    includeDoNotReplyNotice: false
+  });
 }
 
 export async function login(req, res, next) {
@@ -39,6 +118,10 @@ export async function login(req, res, next) {
   if (blockedStatusError) {
     return res.status(403).json({ error: blockedStatusError });
   }
+  const emailVerificationError = getEmailVerificationError(user);
+  if (emailVerificationError) {
+    return res.status(403).json({ error: emailVerificationError });
+  }
 
   const token = signAuthToken(buildAuthPayload(user));
   return res.json({
@@ -46,6 +129,169 @@ export async function login(req, res, next) {
     token,
     user: sanitizeUser(user)
   });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function register(req, res, next) {
+  try {
+    const name = String(req.body?.name || "").trim();
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const password = String(req.body?.password || "");
+    const role = normalizeRole(req.body?.role);
+    const city = String(req.body?.city || "").trim();
+    const country = String(req.body?.country || "").trim();
+    const preferredLanguage = String(req.body?.preferredLanguage || "en").trim().toLowerCase();
+    const acceptedRespectfulConduct = req.body?.acceptedRespectfulConduct === true;
+    const acceptedNoRefunds = req.body?.acceptedNoRefunds === true;
+
+    if (!role) {
+      return res.status(400).json({ error: "role must be buyer, seller, or bar." });
+    }
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: "name, email, and password are required." });
+    }
+    if (!email.includes("@")) {
+      return res.status(400).json({ error: "A valid email address is required." });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters." });
+    }
+    if ((role === "seller" || role === "bar") && (!city || !country)) {
+      return res.status(400).json({ error: "city and country are required for seller and bar accounts." });
+    }
+    if (role === "buyer" && (!acceptedRespectfulConduct || !acceptedNoRefunds)) {
+      return res.status(400).json({ error: "Buyer terms must be accepted." });
+    }
+
+    const existingUser = await getUserByEmail(email);
+    if (existingUser) {
+      return res.status(409).json({ error: "This email is already registered." });
+    }
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const verifyToken = crypto.randomBytes(24).toString("hex");
+    const verifyExpiresAt = new Date(now.getTime() + 1000 * 60 * 60 * 24).toISOString();
+    const userId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const accountStatus = role === "seller" ? "pending" : "active";
+    const baseSlug = buildSlug(name, role === "bar" ? "new-bar" : "new-user");
+    const barId = role === "bar" ? `${baseSlug}-${Math.random().toString(36).slice(2, 6)}` : null;
+
+    await createUser({
+      id: userId,
+      email,
+      name,
+      role,
+      accountStatus,
+      passwordHash: hashPassword(password),
+      barId,
+      profile: {
+        preferredLanguage,
+        notificationPreferences: getDefaultNotificationPreferences(role),
+        emailVerified: false,
+        emailVerificationToken: verifyToken,
+        emailVerificationExpiresAt: verifyExpiresAt,
+        city,
+        country,
+        acceptedBuyerTermsAt:
+          role === "buyer" && acceptedRespectfulConduct && acceptedNoRefunds ? nowIso : undefined,
+        sellerApplicationAt: role === "seller" ? nowIso : undefined,
+        sellerApplicationStatus: role === "seller" ? "pending" : undefined,
+        requestedSellerSlug: role === "seller" ? buildSlug(name, "new-seller") : undefined
+      }
+    });
+
+    const emailResult = await sendVerificationEmail({ email, name, token: verifyToken });
+    if (!emailResult?.delivered && env.nodeEnv === "production") {
+      return res.status(502).json({ error: "Could not send verification email. Please try again." });
+    }
+
+    if (role === "seller") {
+      await sendSellerApprovalRequestEmail({
+        sellerName: name,
+        sellerEmail: email,
+        requestedAt: nowIso
+      }).catch(() => {});
+    }
+
+    return res.status(201).json({
+      ok: true,
+      message: "Account created. Check your email to verify before login.",
+      ...(env.nodeEnv !== "production" ? { verificationToken: verifyToken } : {})
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function verifyEmail(req, res, next) {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const token = String(req.body?.token || "").trim();
+    if (!email || !token) {
+      return res.status(400).json({ error: "email and token are required." });
+    }
+    const result = await verifyUserEmailToken(email, token);
+    if (!result.ok) {
+      if (result.reason === "expired") {
+        return res.status(410).json({ error: "Verification link has expired. Please request a new one." });
+      }
+      return res.status(400).json({ error: "Invalid verification link." });
+    }
+    return res.json({
+      ok: true,
+      message: "Email verified. You can now log in.",
+      user: sanitizeUser(result.user)
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function resendVerificationEmail(req, res, next) {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({ error: "A valid email address is required." });
+    }
+    const user = await getUserByEmail(email);
+    if (!user) {
+      return res.json({
+        ok: true,
+        message: "If this email is registered, a verification link has been sent."
+      });
+    }
+    if (!emailVerificationRequiredForRole(user.role)) {
+      return res.json({
+        ok: true,
+        message: "If this email is registered, a verification link has been sent."
+      });
+    }
+    if (user.emailVerified !== false) {
+      return res.json({
+        ok: true,
+        message: "This account is already verified. You can log in now."
+      });
+    }
+
+    const verifyToken = crypto.randomBytes(24).toString("hex");
+    const verifyExpiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString();
+    await setUserEmailVerificationToken(email, verifyToken, verifyExpiresAt);
+
+    const emailResult = await sendVerificationEmail({
+      email,
+      name: String(user.name || "there"),
+      token: verifyToken
+    });
+    if (!emailResult?.delivered && env.nodeEnv === "production") {
+      return res.status(502).json({ error: "Could not send verification email. Please try again." });
+    }
+    return res.json({
+      ok: true,
+      message: "Verification email sent. Please check your inbox."
+    });
   } catch (error) {
     return next(error);
   }

@@ -6,6 +6,7 @@ import { env } from "./config/env.js";
 import { apiRateLimit, helmetMiddleware } from "./middlewares/security.js";
 
 const app = express();
+app.set("trust proxy", env.trustProxy);
 const allowedOrigins = env.clientOrigin
   .split(",")
   .map((origin) => origin.trim())

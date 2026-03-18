@@ -1,6 +1,15 @@
 import nodemailer from "nodemailer";
 import { env } from "../config/env.js";
 
+const DO_NOT_REPLY_NOTICE = "Do not reply to this email. This inbox is not monitored.";
+
+function withDoNotReplyNotice(text) {
+  const baseText = String(text || "").trim();
+  if (!baseText) return DO_NOT_REPLY_NOTICE;
+  if (baseText.toLowerCase().includes("do not reply")) return baseText;
+  return `${baseText}\n\n${DO_NOT_REPLY_NOTICE}`;
+}
+
 function getTransport() {
   if (!env.smtpHost || !env.smtpUser || !env.smtpPass) {
     return null;
@@ -33,7 +42,7 @@ function getTestRecipients() {
 export async function sendSellerApprovalRequestEmail({ sellerName, sellerEmail, requestedAt }) {
   const transport = getTransport();
   const subject = `Seller approval requested: ${sellerName}`;
-  const text = [
+  const text = withDoNotReplyNotice([
     "A new seller account is waiting for approval.",
     "",
     `Name: ${sellerName}`,
@@ -41,7 +50,7 @@ export async function sendSellerApprovalRequestEmail({ sellerName, sellerEmail, 
     `Requested at: ${requestedAt}`,
     "",
     "Open the admin dashboard and approve the seller account."
-  ].join("\n");
+  ].join("\n"));
 
   if (!transport) {
     console.log(`[email:mock] To: ${env.adminEmail}`);
@@ -60,16 +69,27 @@ export async function sendSellerApprovalRequestEmail({ sellerName, sellerEmail, 
   return { delivered: true, mock: false };
 }
 
-export async function sendPlatformEmail({ toEmail, toName, subject, text }) {
+export async function sendPlatformEmail({
+  toEmail,
+  toName,
+  subject,
+  text,
+  fromEmail = "",
+  replyToEmail = "",
+  includeDoNotReplyNotice = true
+}) {
   const mode = getEmailMode();
   const transport = getTransport();
+  const emailText = includeDoNotReplyNotice ? withDoNotReplyNotice(text) : String(text || "").trim();
+  const resolvedFromEmail = String(fromEmail || env.smtpFrom || "").trim();
+  const resolvedReplyToEmail = String(replyToEmail || "").trim();
   const resolvedTestRecipients = getTestRecipients();
   const recipientList =
     mode === "test"
       ? resolvedTestRecipients
       : [String(toEmail || "").trim()].filter(Boolean);
 
-  if (!subject || !text || recipientList.length === 0) {
+  if (!subject || !emailText || recipientList.length === 0) {
     return {
       delivered: false,
       mock: true,
@@ -104,13 +124,16 @@ export async function sendPlatformEmail({ toEmail, toName, subject, text }) {
   }
 
   await transport.sendMail({
-    from: env.smtpFrom,
+    from: resolvedFromEmail || env.smtpFrom,
     to: recipientList.join(", "),
     subject,
-    text,
+    text: emailText,
+    ...(resolvedReplyToEmail
+      ? { replyTo: resolvedReplyToEmail }
+      : {}),
     ...(mode === "test"
       ? {
-          replyTo: toEmail || undefined
+          replyTo: resolvedReplyToEmail || toEmail || undefined
         }
       : {}),
     ...(toName && mode === "live"
