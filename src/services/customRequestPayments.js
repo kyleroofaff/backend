@@ -362,5 +362,31 @@ export async function acceptCustomRequestQuote({ requestId, buyerUserId }) {
       }
     }).catch(() => {});
   }
+  if (result?.ok && !result.alreadyProcessed) {
+    const adminUser = (getState().users || []).find((entry) => entry.role === "admin" && entry.accountStatus === "active");
+    if (adminUser?.id) {
+      await dispatchPushNotification({
+        userId: adminUser.id,
+        preferenceType: "adminOps",
+        route: `/admin?tab=custom_requests&requestId=${encodeURIComponent(requestId)}`,
+        titleByLang: {
+          en: "Custom quote paid",
+          th: "ชำระราคาคำขอพิเศษแล้ว",
+          my: "Custom quote ကို ငွေပေးချေပြီးပါပြီ",
+          ru: "Оплачен индивидуальный оффер"
+        },
+        bodyByLang: {
+          en: `Buyer accepted and paid quote for request ${requestId}.`,
+          th: `ผู้ซื้อยอมรับและชำระราคาสำหรับคำขอ ${requestId} แล้ว`,
+          my: `ဝယ်သူသည် request ${requestId} အတွက် quote ကို လက်ခံပြီး ပေးချေခဲ့သည်။`,
+          ru: `Покупатель принял(а) и оплатил(а) оффер по запросу ${requestId}.`
+        },
+        data: {
+          kind: "payment_custom_request_quote_accepted",
+          requestId
+        }
+      }).catch(() => {});
+    }
+  }
   return result;
 }

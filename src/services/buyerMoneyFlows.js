@@ -240,6 +240,30 @@ export async function sendBuyerPaidMessage({ buyerUserId, sellerId, conversation
       }
     }).catch(() => {});
   }
+  const adminUser = (getState().users || []).find((entry) => entry.role === "admin" && entry.accountStatus === "active");
+  if (adminUser?.id) {
+    await dispatchPushNotification({
+      userId: adminUser.id,
+      preferenceType: "adminOps",
+      route: "/admin?tab=sales",
+      titleByLang: {
+        en: "Payment received",
+        th: "ได้รับการชำระเงินแล้ว",
+        my: "ငွေပေးချေမှုလက်ခံရရှိပြီ",
+        ru: "Получен платеж"
+      },
+      bodyByLang: {
+        en: `Message fee paid by ${buyer.name || "Buyer"} to ${sellerUser?.name || "Seller"}.`,
+        th: `${buyer.name || "ผู้ซื้อ"} ชำระค่าข้อความให้ ${sellerUser?.name || "ผู้ขาย"} แล้ว`,
+        my: `${buyer.name || "ဝယ်သူ"} သည် ${sellerUser?.name || "Seller"} သို့ message fee ပေးချေခဲ့သည်။`,
+        ru: `${buyer.name || "Покупатель"} оплатил(а) комиссию за сообщение для ${sellerUser?.name || "продавца"}.`
+      },
+      data: {
+        kind: "payment_message_fee",
+        conversationId
+      }
+    }).catch(() => {});
+  }
   return {
     ok: true,
     walletBalance: nextBuyerBalance,
@@ -399,6 +423,30 @@ export async function createBuyerCustomRequest({
       bodyByLang: templates.bodyByLang,
       data: {
         kind: "custom_request_created",
+        requestId
+      }
+    }).catch(() => {});
+  }
+  const adminUser = (getState().users || []).find((entry) => entry.role === "admin" && entry.accountStatus === "active");
+  if (adminUser?.id) {
+    await dispatchPushNotification({
+      userId: adminUser.id,
+      preferenceType: "adminOps",
+      route: `/admin?tab=custom_requests&requestId=${encodeURIComponent(requestId)}`,
+      titleByLang: {
+        en: "Custom request paid",
+        th: "ชำระเงินคำขอพิเศษแล้ว",
+        my: "Custom request အတွက် ငွေပေးချေပြီးပါပြီ",
+        ru: "Оплачен индивидуальный запрос"
+      },
+      bodyByLang: {
+        en: `${normalizedBuyerName || "Buyer"} created and paid custom request ${requestId}.`,
+        th: `${normalizedBuyerName || "ผู้ซื้อ"} สร้างและชำระคำขอพิเศษ ${requestId} แล้ว`,
+        my: `${normalizedBuyerName || "ဝယ်သူ"} သည် custom request ${requestId} ကို ဖန်တီးပြီး ပေးချေခဲ့သည်။`,
+        ru: `${normalizedBuyerName || "Покупатель"} создал(а) и оплатил(а) запрос ${requestId}.`
+      },
+      data: {
+        kind: "payment_custom_request_created",
         requestId
       }
     }).catch(() => {});

@@ -39,6 +39,23 @@ function getTestRecipients() {
     .filter(Boolean);
 }
 
+function normalizeOutboundAttachments(attachments) {
+  if (!Array.isArray(attachments)) return [];
+  return attachments
+    .map((entry) => {
+      const filename = String(entry?.filename || entry?.name || "").trim();
+      const contentType = String(entry?.contentType || entry?.mimeType || "").trim();
+      const contentBase64 = String(entry?.contentBase64 || "").trim();
+      if (!filename || !contentBase64) return null;
+      return {
+        filename: filename.slice(0, 160),
+        contentType: contentType || "application/octet-stream",
+        content: Buffer.from(contentBase64, "base64")
+      };
+    })
+    .filter(Boolean);
+}
+
 export async function sendSellerApprovalRequestEmail({ sellerName, sellerEmail, requestedAt }) {
   const transport = getTransport();
   const subject = `Seller approval requested: ${sellerName}`;
@@ -59,7 +76,7 @@ export async function sendSellerApprovalRequestEmail({ sellerName, sellerEmail, 
     return { delivered: false, mock: true };
   }
 
-  await transport.sendMail({
+  const sendResult = await transport.sendMail({
     from: env.smtpFrom,
     to: env.adminEmail,
     subject,
@@ -76,7 +93,8 @@ export async function sendPlatformEmail({
   text,
   fromEmail = "",
   replyToEmail = "",
-  includeDoNotReplyNotice = true
+  includeDoNotReplyNotice = true,
+  attachments = []
 }) {
   const mode = getEmailMode();
   const transport = getTransport();
@@ -84,6 +102,7 @@ export async function sendPlatformEmail({
   const resolvedFromEmail = String(fromEmail || env.smtpFrom || "").trim();
   const resolvedReplyToEmail = String(replyToEmail || "").trim();
   const resolvedTestRecipients = getTestRecipients();
+  const normalizedAttachments = normalizeOutboundAttachments(attachments);
   const recipientList =
     mode === "test"
       ? resolvedTestRecipients
@@ -123,11 +142,14 @@ export async function sendPlatformEmail({
     };
   }
 
-  await transport.sendMail({
+  const sendResult = await transport.sendMail({
     from: resolvedFromEmail || env.smtpFrom,
     to: recipientList.join(", "),
     subject,
     text: emailText,
+    ...(normalizedAttachments.length
+      ? { attachments: normalizedAttachments }
+      : {}),
     ...(resolvedReplyToEmail
       ? { replyTo: resolvedReplyToEmail }
       : {}),
@@ -147,6 +169,7 @@ export async function sendPlatformEmail({
     delivered: true,
     mock: false,
     mode,
-    recipients: recipientList
+    recipients: recipientList,
+    messageId: String(sendResult?.messageId || "").trim()
   };
 }

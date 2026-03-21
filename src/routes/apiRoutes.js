@@ -25,6 +25,9 @@ import {
   getBootstrap,
   getAdminEmailInboxThreadMessages,
   getAdminEmailInboxThreads,
+  downloadAdminEmailInboxAttachment,
+  getAdminEmailInboxHealth,
+  listEmailSuppressions,
   getPostReports,
   getProducts,
   getSellerPosts,
@@ -41,17 +44,22 @@ import {
   sendBuyerMessageWithFee,
   updatePromptPayReceiver,
   createMonthlyPayoutRun,
+  dispatchManagedNotification,
   markPayoutItemSent,
   ingestPostmarkInboundEmail,
   markPayoutItemFailed,
   walletTopUp,
   walletReconciliation,
+  deleteAdminEmailInboxThread,
   replyAdminEmailInboxThread,
   sendAdminEmailInboxMessage,
+  upsertEmailSuppression,
+  removeEmailSuppression,
   updateAdminEmailInboxThreadStatus
 } from "../controllers/marketplaceController.js";
 import {
   ADMIN_SCOPES,
+  requireAdminAccess,
   requireAdminScope,
   requireAuth,
   requireNonProduction,
@@ -124,7 +132,8 @@ router.post("/seller-posts/:postId/report", requireAuth, requireRole("buyer", "s
 router.get("/seller-post-reports", requireAuth, requireAdminScope(ADMIN_SCOPES.PRODUCTS_MODERATE), getPostReports);
 router.post("/seller-post-reports/:reportId/resolve", requireAuth, requireAdminScope(ADMIN_SCOPES.PRODUCTS_MODERATE), idempotencyOptional, resolvePostReport);
 router.post("/notifications/seller-approval-request", requireAuth, requireAdminScope(ADMIN_SCOPES.AUTH_REVIEW), idempotencyOptional, rejectUnknownBodyKeys(["sellerName", "sellerEmail", "requestedAt"]), notifySellerApprovalRequest);
-router.post("/notifications/platform-email", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), idempotencyOptional, rejectUnknownBodyKeys(["toEmail", "toName", "subject", "text", "body", "templateKey", "actionUrl", "fromEmail", "replyToEmail"]), notifyPlatformEmail);
+router.post("/notifications/platform-email", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), idempotencyOptional, rejectUnknownBodyKeys(["toEmail", "toName", "subject", "text", "body", "templateKey", "actionUrl", "fromEmail", "replyToEmail", "attachments"]), notifyPlatformEmail);
+router.post("/notifications/dispatch", requireAuth, requireAdminAccess, idempotencyOptional, rejectUnknownBodyKeys(["recipientUserIds", "preferenceType", "route", "titleByLang", "bodyByLang", "sendEmail", "emailSubject", "emailText", "kind"]), dispatchManagedNotification);
 router.post("/webhooks/postmark/inbound", ingestPostmarkInboundEmail);
 router.post("/admin/site-settings/promptpay", requireAuth, requireAdminScope(ADMIN_SCOPES.PAYMENTS_MANAGE), idempotencyOptional, rejectUnknownBodyKeys(["promptPayReceiverMobile"]), updatePromptPayReceiver);
 router.post("/admin/payout-runs/monthly", requireAuth, requireAdminScope(ADMIN_SCOPES.PAYMENTS_MANAGE), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["monthValue", "notes"]), createMonthlyPayoutRun);
@@ -132,8 +141,14 @@ router.post("/admin/payout-items/:payoutItemId/sent", requireAuth, requireAdminS
 router.post("/admin/payout-items/:payoutItemId/failed", requireAuth, requireAdminScope(ADMIN_SCOPES.PAYMENTS_MANAGE), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["reason"]), markPayoutItemFailed);
 router.get("/admin/email-inbox/threads", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), getAdminEmailInboxThreads);
 router.get("/admin/email-inbox/threads/:threadId/messages", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), getAdminEmailInboxThreadMessages);
-router.post("/admin/email-inbox/send", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["mailbox", "toEmail", "toName", "subject", "body"]), sendAdminEmailInboxMessage);
-router.post("/admin/email-inbox/threads/:threadId/reply", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["mailbox", "toEmail", "toName", "subject", "body"]), replyAdminEmailInboxThread);
+router.get("/admin/email-inbox/threads/:threadId/messages/:messageId/attachments/:attachmentId", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), downloadAdminEmailInboxAttachment);
+router.get("/admin/email-inbox/health", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), getAdminEmailInboxHealth);
+router.get("/admin/email-inbox/suppressions", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), listEmailSuppressions);
+router.post("/admin/email-inbox/suppressions", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), idempotencyOptional, rejectUnknownBodyKeys(["email", "reason"]), upsertEmailSuppression);
+router.delete("/admin/email-inbox/suppressions/:email", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), idempotencyOptional, removeEmailSuppression);
+router.delete("/admin/email-inbox/threads/:threadId", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), idempotencyOptional, deleteAdminEmailInboxThread);
+router.post("/admin/email-inbox/send", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["mailbox", "toEmail", "toName", "subject", "body", "attachments"]), sendAdminEmailInboxMessage);
+router.post("/admin/email-inbox/threads/:threadId/reply", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), requireIdempotencyKey, idempotencyOptional, rejectUnknownBodyKeys(["mailbox", "toEmail", "toName", "subject", "body", "attachments"]), replyAdminEmailInboxThread);
 router.post("/admin/email-inbox/threads/:threadId/status", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), idempotencyOptional, rejectUnknownBodyKeys(["status"]), updateAdminEmailInboxThreadStatus);
 router.post("/translate", requireAuth, idempotencyOptional, rejectUnknownBodyKeys(["text", "targetLang"]), translateText);
 router.get("/reconciliation/wallet", requireAuth, requireAdminScope(ADMIN_SCOPES.PAYMENTS_MANAGE), walletReconciliation);

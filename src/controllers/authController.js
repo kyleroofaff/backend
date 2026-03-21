@@ -11,6 +11,7 @@ import {
   verifyUserEmailToken
 } from "../repositories/userRepository.js";
 import { sendPlatformEmail, sendSellerApprovalRequestEmail } from "../services/mailer.js";
+import { dispatchPushNotification } from "../services/pushService.js";
 import { hashPassword, verifyPassword } from "../utils/password.js";
 
 function sanitizeUser(user) {
@@ -241,6 +242,32 @@ export async function register(req, res, next) {
         sellerName: name,
         sellerEmail: email,
         requestedAt: nowIso
+      }).catch(() => {});
+    }
+    const adminRecipient = await getUserByEmail(env.adminEmail).catch(() => null);
+    if (adminRecipient?.id) {
+      const roleLabel = role === "seller" ? "seller" : (role === "bar" ? "bar" : "buyer");
+      await dispatchPushNotification({
+        userId: adminRecipient.id,
+        preferenceType: "adminOps",
+        route: "/admin?tab=users",
+        titleByLang: {
+          en: "New account signup",
+          th: "มีผู้สมัครสมาชิกใหม่",
+          my: "Account အသစ်စာရင်းသွင်းထားသည်",
+          ru: "Новая регистрация аккаунта"
+        },
+        bodyByLang: {
+          en: `${name} signed up as ${roleLabel}.`,
+          th: `${name} สมัครเป็น ${roleLabel} แล้ว`,
+          my: `${name} သည် ${roleLabel} အဖြစ် စာရင်းသွင်းခဲ့သည်။`,
+          ru: `${name} зарегистрировался(ась) как ${roleLabel}.`
+        },
+        data: {
+          kind: "user_signup",
+          signupRole: role,
+          userEmail: email
+        }
       }).catch(() => {});
     }
 

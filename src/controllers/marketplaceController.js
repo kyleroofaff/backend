@@ -11,12 +11,14 @@ import {
   resetState
 } from "../db/store.js";
 import { sendPlatformEmail, sendSellerApprovalRequestEmail } from "../services/mailer.js";
+import { scanAttachmentContentBase64 } from "../services/attachmentScanner.js";
 import { dispatchPushNotification } from "../services/pushService.js";
 import { getWalletReconciliationSummary } from "../services/reconciliation.js";
 import { acceptCustomRequestQuote } from "../services/customRequestPayments.js";
 import { payCheckoutWithWallet, topUpWallet } from "../services/walletCommerce.js";
 import { createBuyerCustomRequest, sendBuyerPaidMessage } from "../services/buyerMoneyFlows.js";
 import { env } from "../config/env.js";
+import { getUserById } from "../repositories/userRepository.js";
 
 const SUPPORTED_TRANSLATION_LANGUAGES = new Set(["en", "th", "my", "ru"]);
 const PAYOUT_SCHEDULE = "monthly";
@@ -24,7 +26,37 @@ const PAYOUT_MIN_THRESHOLD_THB = 100;
 const PAYOUT_HOLD_DAYS = 14;
 const DEFAULT_PROMPTPAY_RECEIVER_MOBILE = "0812345678";
 const PAYOUT_ELIGIBLE_TYPES = new Set(["message_fee", "order_sale_earning", "order_bar_commission"]);
-const EMAIL_INBOX_STATUSES = new Set(["open", "pending_customer", "closed"]);
+const EMAIL_INBOX_STATUSES = new Set(["open", "pending_customer", "archived"]);
+const EMAIL_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+const EMAIL_ATTACHMENT_MAX_COUNT = 5;
+const EMAIL_ATTACHMENT_MAX_TOTAL_BYTES = 15 * 1024 * 1024;
+const EMAIL_HEALTH_EVENT_LIMIT = 120;
+const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
+  "text/plain",
+  "text/csv",
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/zip"
+]);
+const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
+  "txt",
+  "csv",
+  "pdf",
+  "jpg",
+  "jpeg",
+  "png",
+  "webp",
+  "zip"
+]);
+
+function normalizeEmailThreadStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "closed") return "archived";
+  if (EMAIL_INBOX_STATUSES.has(normalized)) return normalized;
+  return "open";
+}
 
 function normalizeMailboxType(value) {
   return String(value || "").trim().toLowerCase() === "support" ? "support" : "admin";
@@ -41,7 +73,13 @@ function ensureEmailInboxCollections(state) {
   return {
     ...state,
     adminEmailThreads: Array.isArray(state?.adminEmailThreads) ? state.adminEmailThreads : [],
-    adminEmailMessages: Array.isArray(state?.adminEmailMessages) ? state.adminEmailMessages : []
+    adminEmailMessages: Array.isArray(state?.adminEmailMessages) ? state.adminEmailMessages : [],
+    emailInboxHealth: {
+      webhookEvents: Array.isArray(state?.emailInboxHealth?.webhookEvents) ? state.emailInboxHealth.webhookEvents : [],
+      lastWebhookAt: String(state?.emailInboxHealth?.lastWebhookAt || "").trim(),
+      lastWebhookStatus: String(state?.emailInboxHealth?.lastWebhookStatus || "").trim(),
+    },
+    emailSuppressions: Array.isArray(state?.emailSuppressions) ? state.emailSuppressions : []
   };
 }
 
@@ -76,6 +114,225 @@ function resolveMailboxFromRecipients(recipients) {
 function buildThreadSnippet(textBody) {
   const compact = String(textBody || "").replace(/\s+/g, " ").trim();
   return compact.slice(0, 240);
+}
+
+function normalizeThreadSubject(subject) {
+  return String(subject || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^(re|fwd?)\s*:\s*/i, "")
+    .trim();
+}
+
+function isReplySubject(subject) {
+  return /^(re|fwd?)\s*:/i.test(String(subject || "").trim());
+}
+
+function parseInboundAttachments(payload) {
+  if (!Array.isArray(payload?.Attachments)) return [];
+  let totalBytes = 0;
+  return payload.Attachments.map((entry, index) => {
+    const filename = String(entry?.Name || entry?.Filename || `attachment-${index + 1}`).trim() || `attachment-${index + 1}`;
+    const contentType = String(entry?.ContentType || "application/octet-stream").trim() || "application/octet-stream";
+    const contentBase64 = String(entry?.Content || "").trim();
+    const declaredLength = Number(entry?.ContentLength || 0);
+    const sizeBytes = Number.isFinite(declaredLength) && declaredLength > 0
+      ? declaredLength
+      : Math.floor((contentBase64.length * 3) / 4);
+    const extension = String(filename.split(".").pop() || "").trim().toLowerCase();
+    const allowedByMime = ALLOWED_ATTACHMENT_MIME_TYPES.has(contentType.toLowerCase());
+    const allowedByExt = ALLOWED_ATTACHMENT_EXTENSIONS.has(extension);
+    const typeAllowed = allowedByMime && allowedByExt;
+    const withinSingleLimit = Number.isFinite(sizeBytes) && sizeBytes > 0 && sizeBytes <= EMAIL_ATTACHMENT_MAX_BYTES;
+    totalBytes += Number.isFinite(sizeBytes) && sizeBytes > 0 ? sizeBytes : 0;
+    const withinTotalLimit = totalBytes <= EMAIL_ATTACHMENT_MAX_TOTAL_BYTES;
+    const withinCountLimit = index < EMAIL_ATTACHMENT_MAX_COUNT;
+    const blockedReason = !withinCountLimit
+      ? "too_many_attachments"
+      : (!typeAllowed
+        ? "disallowed_type"
+        : (!withinSingleLimit
+          ? "file_too_large"
+          : (!withinTotalLimit ? "total_size_exceeded" : "")));
+    const keepContent = !blockedReason;
+    return {
+      id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      filename: filename.slice(0, 180),
+      contentType,
+      sizeBytes: Number.isFinite(sizeBytes) ? sizeBytes : 0,
+      contentBase64: keepContent ? contentBase64 : "",
+      blockedReason: blockedReason || "",
+      scanStatus: keepContent ? "not_scanned" : "blocked"
+    };
+  }).filter((entry) => entry.contentBase64 || entry.blockedReason);
+}
+
+function sanitizeOutboundAttachments(input) {
+  if (!Array.isArray(input)) return { ok: true, attachments: [] };
+  if (input.length > EMAIL_ATTACHMENT_MAX_COUNT) {
+    return { ok: false, error: `Maximum ${EMAIL_ATTACHMENT_MAX_COUNT} attachments are allowed.` };
+  }
+  const attachments = [];
+  let totalBytes = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    const entry = input[index];
+    const filename = String(entry?.filename || entry?.name || "").trim();
+    const contentType = String(entry?.contentType || "application/octet-stream").trim() || "application/octet-stream";
+    const contentBase64 = String(entry?.contentBase64 || "").trim();
+    if (!filename || !contentBase64) {
+      return { ok: false, error: "Attachment filename and content are required." };
+    }
+    if (!/^[A-Za-z0-9+/=]+$/.test(contentBase64)) {
+      return { ok: false, error: `Attachment "${filename}" has invalid base64 content.` };
+    }
+    const extension = String(filename.split(".").pop() || "").trim().toLowerCase();
+    const allowedByMime = ALLOWED_ATTACHMENT_MIME_TYPES.has(contentType.toLowerCase());
+    const allowedByExt = ALLOWED_ATTACHMENT_EXTENSIONS.has(extension);
+    if (!allowedByMime || !allowedByExt) {
+      return {
+        ok: false,
+        error: `Attachment "${filename}" is not allowed. Allowed types: ${[...ALLOWED_ATTACHMENT_EXTENSIONS].join(", ")}.`
+      };
+    }
+    const sizeBytes = Math.floor((contentBase64.length * 3) / 4);
+    if (sizeBytes > EMAIL_ATTACHMENT_MAX_BYTES) {
+      return { ok: false, error: `Attachment "${filename}" exceeds ${Math.round(EMAIL_ATTACHMENT_MAX_BYTES / (1024 * 1024))}MB.` };
+    }
+    totalBytes += sizeBytes;
+    if (totalBytes > EMAIL_ATTACHMENT_MAX_TOTAL_BYTES) {
+      return { ok: false, error: `Total attachments exceed ${Math.round(EMAIL_ATTACHMENT_MAX_TOTAL_BYTES / (1024 * 1024))}MB.` };
+    }
+    attachments.push({
+      filename: filename.slice(0, 180),
+      contentType,
+      contentBase64,
+      sizeBytes,
+      blockedReason: "",
+      scanStatus: "not_scanned"
+    });
+  }
+  return { ok: true, attachments };
+}
+
+async function applyAttachmentScanningPolicy(attachments, { dropContentOnMalicious = true } = {}) {
+  if (!Array.isArray(attachments) || attachments.length === 0) {
+    return {
+      ok: true,
+      attachments: [],
+      blockedCount: 0,
+      maliciousCount: 0,
+      scanErrorCount: 0
+    };
+  }
+  const nextAttachments = [];
+  let blockedCount = 0;
+  let maliciousCount = 0;
+  let scanErrorCount = 0;
+  for (const attachment of attachments) {
+    const baseAttachment = {
+      ...attachment,
+      blockedReason: String(attachment?.blockedReason || "").trim(),
+      scanStatus: String(attachment?.scanStatus || "unknown").trim() || "unknown"
+    };
+    if (baseAttachment.blockedReason || !String(baseAttachment.contentBase64 || "").trim()) {
+      blockedCount += 1;
+      nextAttachments.push({
+        ...baseAttachment,
+        contentBase64: "",
+        scanStatus: baseAttachment.scanStatus || "blocked"
+      });
+      continue;
+    }
+    const scanResult = await scanAttachmentContentBase64(baseAttachment.contentBase64);
+    if (scanResult.status === "clean" || scanResult.status === "not_scanned") {
+      nextAttachments.push({
+        ...baseAttachment,
+        scanStatus: scanResult.status
+      });
+      continue;
+    }
+    if (scanResult.status === "malicious") {
+      maliciousCount += 1;
+      blockedCount += 1;
+      nextAttachments.push({
+        ...baseAttachment,
+        contentBase64: dropContentOnMalicious ? "" : baseAttachment.contentBase64,
+        blockedReason: scanResult.signature
+          ? `malware_detected:${scanResult.signature}`
+          : "malware_detected",
+        scanStatus: "malicious"
+      });
+      continue;
+    }
+    scanErrorCount += 1;
+    if (env.attachmentScanBlockOnError) {
+      blockedCount += 1;
+      nextAttachments.push({
+        ...baseAttachment,
+        contentBase64: "",
+        blockedReason: "scan_error",
+        scanStatus: "error"
+      });
+    } else {
+      nextAttachments.push({
+        ...baseAttachment,
+        scanStatus: "error"
+      });
+    }
+  }
+  return {
+    ok: true,
+    attachments: nextAttachments,
+    blockedCount,
+    maliciousCount,
+    scanErrorCount
+  };
+}
+
+function appendWebhookHealthEvent(state, event) {
+  const now = new Date().toISOString();
+  const nextEvent = {
+    id: `webhook_evt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    at: now,
+    ...event
+  };
+  const events = [nextEvent, ...(state.emailInboxHealth?.webhookEvents || [])].slice(0, EMAIL_HEALTH_EVENT_LIMIT);
+  return {
+    ...state,
+    emailInboxHealth: {
+      webhookEvents: events,
+      lastWebhookAt: now,
+      lastWebhookStatus: String(event?.status || "ok")
+    }
+  };
+}
+
+function findEmailSuppression(state, emailValue) {
+  const email = normalizeEmailValue(emailValue);
+  if (!email) return null;
+  return (state.emailSuppressions || []).find((entry) => normalizeEmailValue(entry?.email) === email) || null;
+}
+
+function sanitizeAttachmentForList(attachment) {
+  return {
+    id: String(attachment?.id || "").trim(),
+    filename: String(attachment?.filename || "attachment").trim() || "attachment",
+    contentType: String(attachment?.contentType || "application/octet-stream").trim() || "application/octet-stream",
+    sizeBytes: Number(attachment?.sizeBytes || 0),
+    hasContent: Boolean(String(attachment?.contentBase64 || "").trim()),
+    blockedReason: String(attachment?.blockedReason || "").trim(),
+    scanStatus: String(attachment?.scanStatus || "unknown").trim()
+  };
+}
+
+function sanitizeInboxMessageForList(message) {
+  const attachments = Array.isArray(message?.attachments)
+    ? message.attachments.map(sanitizeAttachmentForList)
+    : [];
+  return {
+    ...message,
+    attachments
+  };
 }
 
 function normalizePayoutMethod(method) {
@@ -479,7 +736,7 @@ export function markPayoutItemFailed(req, res) {
   return res.json({ ok: true, message: "Marked payout item as failed.", db: nextState });
 }
 
-export function ingestPostmarkInboundEmail(req, res) {
+export async function ingestPostmarkInboundEmail(req, res) {
   const configuredToken = String(env.inboundWebhookToken || "").trim();
   const providedToken = String(
     req.get("x-inbound-webhook-token")
@@ -491,6 +748,11 @@ export function ingestPostmarkInboundEmail(req, res) {
     return res.status(503).json({ ok: false, error: "Inbound webhook token is not configured." });
   }
   if (!providedToken || providedToken !== configuredToken) {
+    const deniedState = appendWebhookHealthEvent(
+      ensureEmailInboxCollections(ensureAdminCollections(getState())),
+      { status: "denied", error: "invalid_token" }
+    );
+    replaceState(deniedState);
     return res.status(403).json({ ok: false, error: "Invalid webhook token." });
   }
 
@@ -506,8 +768,18 @@ export function ingestPostmarkInboundEmail(req, res) {
   const recipients = parseRecipientEmails(req.body);
   const mailbox = resolveMailboxFromRecipients(recipients);
   const mailboxAddress = getMailboxAddress(mailbox);
+  const inboundAttachmentsParsed = parseInboundAttachments(req.body);
+  const inboundAttachmentPolicy = await applyAttachmentScanningPolicy(inboundAttachmentsParsed, { dropContentOnMalicious: true });
+  const inboundAttachments = inboundAttachmentPolicy.attachments;
 
   if (!fromEmail) {
+    const failedState = appendWebhookHealthEvent(state, {
+      status: "error",
+      error: "missing_sender",
+      mailbox,
+      externalMessageId
+    });
+    replaceState(failedState);
     return res.status(400).json({ ok: false, error: "Inbound payload missing sender email." });
   }
 
@@ -515,6 +787,13 @@ export function ingestPostmarkInboundEmail(req, res) {
     ? (state.adminEmailMessages || []).find((entry) => entry?.externalMessageId === externalMessageId)
     : null;
   if (existingMessageByExternalId) {
+    const duplicateState = appendWebhookHealthEvent(state, {
+      status: "duplicate",
+      mailbox,
+      fromEmail,
+      externalMessageId
+    });
+    replaceState(duplicateState);
     return res.json({ ok: true, duplicate: true });
   }
 
@@ -525,11 +804,14 @@ export function ingestPostmarkInboundEmail(req, res) {
       targetThread = (state.adminEmailThreads || []).find((entry) => entry.id === referencedMessage.threadId) || null;
     }
   }
-  if (!targetThread) {
+  const shouldThreadAsReply = Boolean(externalInReplyTo) || isReplySubject(subject);
+  if (!targetThread && shouldThreadAsReply) {
+    const normalizedIncomingSubject = normalizeThreadSubject(subject);
     targetThread = (state.adminEmailThreads || []).find((entry) => (
       normalizeMailboxType(entry?.mailbox) === mailbox
       && normalizeEmailValue(entry?.participantEmail) === fromEmail
-      && String(entry?.status || "open") !== "closed"
+      && normalizeThreadSubject(entry?.lastSubject) === normalizedIncomingSubject
+      && normalizeEmailThreadStatus(entry?.status) !== "archived"
     )) || null;
   }
 
@@ -546,8 +828,23 @@ export function ingestPostmarkInboundEmail(req, res) {
     subject,
     text: textBody,
     html: htmlBody,
+    attachments: inboundAttachments.map((attachment) => ({
+      id: attachment.id,
+      filename: attachment.filename,
+      contentType: attachment.contentType,
+      sizeBytes: attachment.sizeBytes,
+      contentBase64: attachment.contentBase64,
+      blockedReason: attachment.blockedReason || "",
+      scanStatus: attachment.scanStatus || "unknown"
+    })),
     externalMessageId: externalMessageId || "",
     externalInReplyTo: externalInReplyTo || "",
+    delivery: {
+      status: "received",
+      provider: "postmark",
+      direction: "inbound",
+      receivedAt: now
+    },
     createdAt: now
   };
 
@@ -574,7 +871,7 @@ export function ingestPostmarkInboundEmail(req, res) {
     updatedAt: now
   };
 
-  const nextState = {
+  const nextStateBase = {
     ...state,
     adminEmailThreads: [
       nextThread,
@@ -585,6 +882,13 @@ export function ingestPostmarkInboundEmail(req, res) {
       nextMessage
     ].slice(-12000)
   };
+  const nextState = appendWebhookHealthEvent(nextStateBase, {
+    status: "ok",
+    mailbox,
+    fromEmail,
+    externalMessageId: externalMessageId || null,
+    threadId
+  });
   replaceState(nextState);
   return res.json({ ok: true, threadId, messageId: inboundMessageId });
 }
@@ -592,14 +896,19 @@ export function ingestPostmarkInboundEmail(req, res) {
 export function getAdminEmailInboxThreads(_req, res) {
   const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
   const mailboxFilter = String(_req.query?.mailbox || "all").trim().toLowerCase();
-  const statusFilter = String(_req.query?.status || "all").trim().toLowerCase();
+  const statusFilterRaw = String(_req.query?.status || "all").trim().toLowerCase();
+  const statusFilter = statusFilterRaw === "all"
+    ? "all"
+    : (statusFilterRaw === "active" ? "active" : normalizeEmailThreadStatus(statusFilterRaw));
   const search = String(_req.query?.search || "").trim().toLowerCase();
   const sorted = [...(state.adminEmailThreads || [])].sort(
     (a, b) => new Date(b.lastMessageAt || b.createdAt || 0).getTime() - new Date(a.lastMessageAt || a.createdAt || 0).getTime()
   );
   const filtered = sorted.filter((thread) => {
+    const normalizedThreadStatus = normalizeEmailThreadStatus(thread?.status);
     if (mailboxFilter !== "all" && normalizeMailboxType(thread?.mailbox) !== mailboxFilter) return false;
-    if (statusFilter !== "all" && String(thread?.status || "open") !== statusFilter) return false;
+    if (statusFilter === "active" && !["open", "pending_customer"].includes(normalizedThreadStatus)) return false;
+    if (statusFilter !== "all" && statusFilter !== "active" && normalizedThreadStatus !== statusFilter) return false;
     if (!search) return true;
     const haystack = [
       thread?.participantEmail,
@@ -620,14 +929,128 @@ export function getAdminEmailInboxThreadMessages(req, res) {
   if (!thread) return res.status(404).json({ ok: false, error: "Email thread not found." });
   const messages = (state.adminEmailMessages || [])
     .filter((entry) => entry.threadId === threadId)
-    .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+    .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime())
+    .map(sanitizeInboxMessageForList);
   return res.json({ ok: true, thread, messages });
+}
+
+export function downloadAdminEmailInboxAttachment(req, res) {
+  const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
+  const threadId = String(req.params.threadId || "").trim();
+  const messageId = String(req.params.messageId || "").trim();
+  const attachmentId = String(req.params.attachmentId || "").trim();
+  if (!threadId || !messageId || !attachmentId) {
+    return res.status(400).json({ ok: false, error: "threadId, messageId, and attachmentId are required." });
+  }
+  const thread = (state.adminEmailThreads || []).find((entry) => entry.id === threadId);
+  if (!thread) return res.status(404).json({ ok: false, error: "Email thread not found." });
+  const message = (state.adminEmailMessages || []).find((entry) => entry.id === messageId && entry.threadId === threadId);
+  if (!message) return res.status(404).json({ ok: false, error: "Email message not found." });
+  const attachment = (Array.isArray(message.attachments) ? message.attachments : [])
+    .find((entry) => String(entry?.id || "").trim() === attachmentId);
+  if (!attachment) return res.status(404).json({ ok: false, error: "Attachment not found." });
+  const contentBase64 = String(attachment?.contentBase64 || "").trim();
+  if (!contentBase64) {
+    return res.status(404).json({ ok: false, error: "Attachment content is not retained." });
+  }
+  const filename = String(attachment?.filename || "attachment").trim() || "attachment";
+  const contentType = String(attachment?.contentType || "application/octet-stream").trim() || "application/octet-stream";
+  let buffer;
+  try {
+    buffer = Buffer.from(contentBase64, "base64");
+  } catch {
+    return res.status(500).json({ ok: false, error: "Attachment content could not be decoded." });
+  }
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Content-Disposition", `attachment; filename="${filename.replace(/"/g, "")}"`);
+  return res.send(buffer);
+}
+
+export function getAdminEmailInboxHealth(_req, res) {
+  const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
+  const events = state.emailInboxHealth?.webhookEvents || [];
+  const okEvents = events.filter((entry) => entry.status === "ok").length;
+  const deniedEvents = events.filter((entry) => entry.status === "denied").length;
+  const duplicateEvents = events.filter((entry) => entry.status === "duplicate").length;
+  const errorEvents = events.filter((entry) => entry.status === "error").length;
+  return res.json({
+    ok: true,
+    webhook: {
+      lastWebhookAt: state.emailInboxHealth?.lastWebhookAt || null,
+      lastWebhookStatus: state.emailInboxHealth?.lastWebhookStatus || null,
+      totals: {
+        ok: okEvents,
+        denied: deniedEvents,
+        duplicate: duplicateEvents,
+        error: errorEvents
+      },
+      recentEvents: events.slice(0, 20)
+    }
+  });
+}
+
+export function listEmailSuppressions(_req, res) {
+  const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
+  const suppressions = [...(state.emailSuppressions || [])].sort(
+    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+  );
+  return res.json({ ok: true, suppressions });
+}
+
+export function upsertEmailSuppression(req, res) {
+  const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
+  const email = normalizeEmailValue(req.body?.email);
+  const reason = String(req.body?.reason || "manual_suppression").trim().slice(0, 240) || "manual_suppression";
+  if (!email || !email.includes("@")) {
+    return res.status(400).json({ ok: false, error: "Valid email is required." });
+  }
+  const actorUserId = String(req.auth?.user?.id || "").trim() || null;
+  const now = new Date().toISOString();
+  const existing = findEmailSuppression(state, email);
+  const nextSuppression = existing
+    ? { ...existing, reason, updatedAt: now, updatedByUserId: actorUserId }
+    : {
+        id: `email_sup_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        email,
+        reason,
+        createdAt: now,
+        createdByUserId: actorUserId,
+        updatedAt: now,
+        updatedByUserId: actorUserId
+      };
+  const nextState = {
+    ...state,
+    emailSuppressions: [
+      nextSuppression,
+      ...(state.emailSuppressions || []).filter((entry) => normalizeEmailValue(entry?.email) !== email)
+    ]
+  };
+  replaceState(nextState);
+  return res.json({ ok: true, suppression: nextSuppression });
+}
+
+export function removeEmailSuppression(req, res) {
+  const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
+  const email = normalizeEmailValue(req.params?.email || "");
+  if (!email || !email.includes("@")) {
+    return res.status(400).json({ ok: false, error: "Valid email is required." });
+  }
+  const existing = findEmailSuppression(state, email);
+  if (!existing) {
+    return res.status(404).json({ ok: false, error: "Suppression not found." });
+  }
+  const nextState = {
+    ...state,
+    emailSuppressions: (state.emailSuppressions || []).filter((entry) => normalizeEmailValue(entry?.email) !== email)
+  };
+  replaceState(nextState);
+  return res.json({ ok: true, removedEmail: email });
 }
 
 export function updateAdminEmailInboxThreadStatus(req, res) {
   const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
   const threadId = String(req.params.threadId || "").trim();
-  const status = String(req.body?.status || "").trim();
+  const status = normalizeEmailThreadStatus(req.body?.status);
   if (!threadId) return res.status(400).json({ ok: false, error: "threadId is required." });
   if (!EMAIL_INBOX_STATUSES.has(status)) {
     return res.status(400).json({ ok: false, error: "Invalid status." });
@@ -638,7 +1061,7 @@ export function updateAdminEmailInboxThreadStatus(req, res) {
   const nextThread = {
     ...existingThread,
     status,
-    unreadCount: status === "closed" ? 0 : Number(existingThread.unreadCount || 0),
+    unreadCount: status === "archived" ? 0 : Number(existingThread.unreadCount || 0),
     updatedAt: now
   };
   const nextState = {
@@ -650,6 +1073,21 @@ export function updateAdminEmailInboxThreadStatus(req, res) {
   };
   replaceState(nextState);
   return res.json({ ok: true, thread: nextThread });
+}
+
+export function deleteAdminEmailInboxThread(req, res) {
+  const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
+  const threadId = String(req.params.threadId || "").trim();
+  if (!threadId) return res.status(400).json({ ok: false, error: "threadId is required." });
+  const existingThread = (state.adminEmailThreads || []).find((entry) => entry.id === threadId);
+  if (!existingThread) return res.status(404).json({ ok: false, error: "Email thread not found." });
+  const nextState = {
+    ...state,
+    adminEmailThreads: (state.adminEmailThreads || []).filter((entry) => entry.id !== threadId),
+    adminEmailMessages: (state.adminEmailMessages || []).filter((entry) => entry.threadId !== threadId)
+  };
+  replaceState(nextState);
+  return res.json({ ok: true, deletedThreadId: threadId });
 }
 
 export async function replyAdminEmailInboxThread(req, res) {
@@ -671,6 +1109,22 @@ export async function replyAdminEmailInboxThread(req, res) {
   if (!toEmail) {
     return res.status(400).json({ ok: false, error: "Thread has no recipient email." });
   }
+  const suppressionEntry = findEmailSuppression(state, toEmail);
+  if (suppressionEntry) {
+    return res.status(409).json({ ok: false, error: `Email is suppressed: ${suppressionEntry.reason || "manual_suppression"}.` });
+  }
+  const sanitizedAttachments = sanitizeOutboundAttachments(req.body?.attachments);
+  if (!sanitizedAttachments.ok) {
+    return res.status(400).json({ ok: false, error: sanitizedAttachments.error || "Invalid attachments." });
+  }
+  const scannedAttachments = await applyAttachmentScanningPolicy(sanitizedAttachments.attachments, { dropContentOnMalicious: true });
+  const blockedScanAttachment = scannedAttachments.attachments.find((entry) => String(entry?.blockedReason || "").trim());
+  if (blockedScanAttachment) {
+    return res.status(400).json({
+      ok: false,
+      error: `Attachment "${blockedScanAttachment.filename}" blocked: ${blockedScanAttachment.blockedReason || "policy_block"}.`
+    });
+  }
 
   const emailResult = await sendPlatformEmail({
     toEmail,
@@ -679,7 +1133,8 @@ export async function replyAdminEmailInboxThread(req, res) {
     text: body,
     fromEmail,
     replyToEmail: fromEmail,
-    includeDoNotReplyNotice: false
+    includeDoNotReplyNotice: false,
+    attachments: scannedAttachments.attachments
   });
   if (!emailResult?.delivered) {
     return res.status(502).json({ ok: false, error: `Could not send reply (${emailResult?.reason || "unknown"}).` });
@@ -698,8 +1153,24 @@ export async function replyAdminEmailInboxThread(req, res) {
     subject,
     text: body,
     html: "",
-    externalMessageId: "",
+    attachments: scannedAttachments.attachments.map((attachment) => ({
+      id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      filename: attachment.filename,
+      contentType: attachment.contentType,
+      sizeBytes: attachment.sizeBytes,
+      contentBase64: attachment.contentBase64,
+      blockedReason: attachment.blockedReason || "",
+      scanStatus: attachment.scanStatus || "not_scanned"
+    })),
+    externalMessageId: String(emailResult?.messageId || "").trim(),
     externalInReplyTo: "",
+    delivery: {
+      status: emailResult.delivered ? "sent" : "failed",
+      provider: "postmark",
+      mode: emailResult.mode || "",
+      reason: emailResult.reason || null,
+      recipients: emailResult.recipients || [toEmail]
+    },
     createdAt: now
   };
   const nextThread = {
@@ -754,6 +1225,22 @@ export async function sendAdminEmailInboxMessage(req, res) {
   if (!toEmail.includes("@")) {
     return res.status(400).json({ ok: false, error: "Valid recipient email is required." });
   }
+  const suppressionEntry = findEmailSuppression(state, toEmail);
+  if (suppressionEntry) {
+    return res.status(409).json({ ok: false, error: `Email is suppressed: ${suppressionEntry.reason || "manual_suppression"}.` });
+  }
+  const sanitizedAttachments = sanitizeOutboundAttachments(req.body?.attachments);
+  if (!sanitizedAttachments.ok) {
+    return res.status(400).json({ ok: false, error: sanitizedAttachments.error || "Invalid attachments." });
+  }
+  const scannedAttachments = await applyAttachmentScanningPolicy(sanitizedAttachments.attachments, { dropContentOnMalicious: true });
+  const blockedScanAttachment = scannedAttachments.attachments.find((entry) => String(entry?.blockedReason || "").trim());
+  if (blockedScanAttachment) {
+    return res.status(400).json({
+      ok: false,
+      error: `Attachment "${blockedScanAttachment.filename}" blocked: ${blockedScanAttachment.blockedReason || "policy_block"}.`
+    });
+  }
 
   const emailResult = await sendPlatformEmail({
     toEmail,
@@ -762,7 +1249,8 @@ export async function sendAdminEmailInboxMessage(req, res) {
     text: body,
     fromEmail,
     replyToEmail: fromEmail,
-    includeDoNotReplyNotice: false
+    includeDoNotReplyNotice: false,
+    attachments: scannedAttachments.attachments
   });
   if (!emailResult?.delivered) {
     return res.status(502).json({ ok: false, error: `Could not send email (${emailResult?.reason || "unknown"}).` });
@@ -772,7 +1260,7 @@ export async function sendAdminEmailInboxMessage(req, res) {
   const existingThread = (state.adminEmailThreads || []).find((entry) => (
     normalizeMailboxType(entry?.mailbox) === mailbox
     && normalizeEmailValue(entry?.participantEmail) === toEmail
-    && String(entry?.status || "open") !== "closed"
+    && normalizeEmailThreadStatus(entry?.status) !== "archived"
   )) || null;
   const threadId = existingThread?.id || `email_thread_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const outboundMessage = {
@@ -787,8 +1275,24 @@ export async function sendAdminEmailInboxMessage(req, res) {
     subject,
     text: body,
     html: "",
-    externalMessageId: "",
+    attachments: scannedAttachments.attachments.map((attachment) => ({
+      id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      filename: attachment.filename,
+      contentType: attachment.contentType,
+      sizeBytes: attachment.sizeBytes,
+      contentBase64: attachment.contentBase64,
+      blockedReason: attachment.blockedReason || "",
+      scanStatus: attachment.scanStatus || "not_scanned"
+    })),
+    externalMessageId: String(emailResult?.messageId || "").trim(),
     externalInReplyTo: "",
+    delivery: {
+      status: emailResult.delivered ? "sent" : "failed",
+      provider: "postmark",
+      mode: emailResult.mode || "",
+      reason: emailResult.reason || null,
+      recipients: emailResult.recipients || [toEmail]
+    },
     createdAt: now
   };
   const nextThread = {
@@ -1112,6 +1616,22 @@ export async function notifyPlatformEmail(req, res, next) {
     if (replyToEmail && !allowedFromEmails.has(replyToEmail)) {
       return res.status(400).json({ error: "replyToEmail is not an allowed sender." });
     }
+    const state = ensureEmailInboxCollections(ensureAdminCollections(getState()));
+    const suppressionEntry = findEmailSuppression(state, toEmail);
+    if (suppressionEntry) {
+      return res.status(409).json({ error: `Email is suppressed: ${suppressionEntry.reason || "manual_suppression"}.` });
+    }
+    const sanitizedAttachments = sanitizeOutboundAttachments(req.body?.attachments);
+    if (!sanitizedAttachments.ok) {
+      return res.status(400).json({ error: sanitizedAttachments.error || "Invalid attachments." });
+    }
+    const scannedAttachments = await applyAttachmentScanningPolicy(sanitizedAttachments.attachments, { dropContentOnMalicious: true });
+    const blockedScanAttachment = scannedAttachments.attachments.find((entry) => String(entry?.blockedReason || "").trim());
+    if (blockedScanAttachment) {
+      return res.status(400).json({
+        error: `Attachment "${blockedScanAttachment.filename}" blocked: ${blockedScanAttachment.blockedReason || "policy_block"}.`
+      });
+    }
 
     const result = await sendPlatformEmail({
       toEmail,
@@ -1119,7 +1639,8 @@ export async function notifyPlatformEmail(req, res, next) {
       subject,
       text,
       fromEmail: fromEmail || undefined,
-      replyToEmail: replyToEmail || undefined
+      replyToEmail: replyToEmail || undefined,
+      attachments: scannedAttachments.attachments
     });
     const adminUserId = req.auth?.user?.id || null;
     if (adminUserId) {
@@ -1154,11 +1675,83 @@ export async function notifyPlatformEmail(req, res, next) {
         mock: result.mock,
         mode: result.mode,
         recipients: result.recipients,
-        reason: result.reason || null
+        reason: result.reason || null,
+        messageId: result.messageId || null
       },
       metadata: {
         templateKey,
         actionUrl
+      }
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+export async function dispatchManagedNotification(req, res, next) {
+  try {
+    const recipientUserIds = Array.isArray(req.body?.recipientUserIds)
+      ? req.body.recipientUserIds.map((entry) => String(entry || "").trim()).filter(Boolean)
+      : [];
+    const preferenceTypeRaw = String(req.body?.preferenceType || "engagement").trim().toLowerCase();
+    const preferenceType = ["message", "engagement", "adminops", "admin_ops"].includes(preferenceTypeRaw)
+      ? (preferenceTypeRaw.startsWith("admin") ? "adminOps" : preferenceTypeRaw)
+      : "engagement";
+    const route = String(req.body?.route || "/account").trim() || "/account";
+    const titleByLang = req.body?.titleByLang && typeof req.body.titleByLang === "object" ? req.body.titleByLang : {};
+    const bodyByLang = req.body?.bodyByLang && typeof req.body.bodyByLang === "object" ? req.body.bodyByLang : {};
+    const sendEmail = req.body?.sendEmail === true;
+    const emailSubject = String(req.body?.emailSubject || "").trim();
+    const emailText = String(req.body?.emailText || "").trim();
+    if (recipientUserIds.length === 0) {
+      return res.status(400).json({ ok: false, error: "recipientUserIds is required." });
+    }
+    if (sendEmail && (!emailSubject || !emailText)) {
+      return res.status(400).json({ ok: false, error: "emailSubject and emailText are required when sendEmail is enabled." });
+    }
+
+    const uniqueRecipientUserIds = [...new Set(recipientUserIds)];
+    let pushRequested = 0;
+    let pushSent = 0;
+    let emailRequested = 0;
+    let emailSent = 0;
+    for (const userId of uniqueRecipientUserIds) {
+      pushRequested += 1;
+      const pushResult = await dispatchPushNotification({
+        userId,
+        preferenceType,
+        route,
+        titleByLang,
+        bodyByLang,
+        data: {
+          kind: String(req.body?.kind || "managed_notification").trim() || "managed_notification",
+          route
+        }
+      }).catch(() => ({ ok: false, sentCount: 0 }));
+      pushSent += Number(pushResult?.sentCount || 0);
+
+      if (!sendEmail) continue;
+      const user = await getUserById(userId).catch(() => null);
+      const toEmail = String(user?.email || "").trim().toLowerCase();
+      if (!toEmail || !toEmail.includes("@")) continue;
+      emailRequested += 1;
+      const emailResult = await sendPlatformEmail({
+        toEmail,
+        toName: String(user?.name || "").trim(),
+        subject: emailSubject,
+        text: emailText
+      }).catch(() => ({ delivered: false }));
+      if (emailResult?.delivered) emailSent += 1;
+    }
+
+    return res.json({
+      ok: true,
+      result: {
+        recipients: uniqueRecipientUserIds.length,
+        pushRequested,
+        pushSent,
+        emailRequested,
+        emailSent
       }
     });
   } catch (error) {
