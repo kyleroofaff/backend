@@ -1945,3 +1945,43 @@ export async function createCustomRequestByBuyer(req, res, next) {
     return next(error);
   }
 }
+
+
+export async function updateBarProfile(req, res) {
+  const barId = String(req.params?.barId || "").trim();
+  if (!barId) return res.status(400).json({ error: "Bar ID is required." });
+  const user = req.auth?.user;
+  const isAdmin = user?.role === "admin" || user?.isSuperAdmin === true || user?.hasAdminAccess === true;
+  if (!user || (user.role !== "bar" && !isAdmin)) return res.status(403).json({ error: "Only bar or admin accounts can update bar profiles." });
+  if (!isAdmin && String(user.barId || "").trim() !== barId) return res.status(403).json({ error: "You can only update your own bar profile." });
+
+  const { name, location, about, specials, mapEmbedUrl, mapLink, profileImage, profileImageName, aboutI18n, specialsI18n } = req.body || {};
+  const state = getState();
+  const existingBars = Array.isArray(state.bars) ? state.bars : [];
+  const barIndex = existingBars.findIndex((b) => String(b?.id || "").trim() === barId);
+
+  const barRecord = {
+    id: barId,
+    name: String(name || user.name || "").trim(),
+    location: String(location || "").trim(),
+    about: String(about || "").trim(),
+    specials: String(specials || "").trim(),
+    mapEmbedUrl: String(mapEmbedUrl || "").trim(),
+    mapLink: String(mapLink || "").trim(),
+    profileImage: String(profileImage || "").slice(0, 2 * 1024 * 1024),
+    profileImageName: String(profileImageName || "").trim(),
+    aboutI18n: aboutI18n && typeof aboutI18n === "object" ? aboutI18n : {},
+    specialsI18n: specialsI18n && typeof specialsI18n === "object" ? specialsI18n : {},
+  };
+
+  let nextBars;
+  if (barIndex >= 0) {
+    nextBars = existingBars.map((b, i) => (i === barIndex ? { ...b, ...barRecord } : b));
+  } else {
+    nextBars = [...existingBars, barRecord];
+  }
+
+  await replaceStateAndSeed({ ...state, bars: nextBars });
+  return res.json({ ok: true, bar: barRecord });
+}
+

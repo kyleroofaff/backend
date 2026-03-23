@@ -13,6 +13,7 @@ import {
 import { sendPlatformEmail, sendSellerApprovalRequestEmail } from "../services/mailer.js";
 import { dispatchPushNotification } from "../services/pushService.js";
 import { hashPassword, verifyPassword } from "../utils/password.js";
+import { getState, replaceStateAndSeed } from "../db/store.js";
 
 function sanitizeUser(user) {
   const rawAdminAccess = user?.adminAccess && typeof user.adminAccess === "object" ? user.adminAccess : {};
@@ -51,7 +52,7 @@ function getBlockedStatusError(user) {
 }
 
 function emailVerificationRequiredForRole(role) {
-  return ["buyer", "seller", "bar"].includes(String(role || "").trim().toLowerCase());
+  return ["buyer"].includes(String(role || "").trim().toLowerCase());
 }
 
 function getEmailVerificationError(user) {
@@ -219,7 +220,7 @@ export async function register(req, res, next) {
       profile: {
         preferredLanguage,
         notificationPreferences: getDefaultNotificationPreferences(role),
-        emailVerified: false,
+        emailVerified: (role === "seller" || role === "bar"),
         emailVerificationToken: verifyToken,
         emailVerificationExpiresAt: verifyExpiresAt,
         city,
@@ -232,10 +233,50 @@ export async function register(req, res, next) {
       }
     });
 
-    const emailResult = await sendVerificationEmail({ email, name, token: verifyToken });
-    if (!emailResult?.delivered && env.nodeEnv === "production") {
-      return res.status(502).json({ error: "Could not send verification email. Please try again." });
+    if (role !== "seller" && role !== "bar") {
+      const emailResult = await sendVerificationEmail({ email, name, token: verifyToken });
+      if (!emailResult?.delivered && env.nodeEnv === "production") {
+        return res.status(502).json({ error: "Could not send verification email. Please try again." });
+      }
     }
+
+    if (role === "bar" && barId) {
+      const prevState = getState();
+      const prevBars = Array.isArray(prevState.bars) ? prevState.bars : [];
+      const prevUsers = Array.isArray(prevState.users) ? prevState.users : [];
+
+      let nextBars = prevBars;
+      if (!prevBars.some((b) => String(b?.id || "").trim() === barId)) {
+        nextBars = [...prevBars, {
+          id: barId,
+          name: name || "",
+          location: [city, country].filter(Boolean).join(", "),
+          about: "",
+          specials: "",
+          mapEmbedUrl: "",
+          mapLink: "",
+          profileImage: "",
+          profileImageName: "",
+        }];
+      }
+
+      let nextUsers = prevUsers;
+      if (!prevUsers.some((u) => String(u?.id || "").trim() === userId)) {
+        nextUsers = [...prevUsers, {
+          id: userId,
+          email,
+          name,
+          role,
+          barId,
+          accountStatus: "active",
+          emailVerified: true,
+          preferredLanguage,
+        }];
+      }
+
+      await replaceStateAndSeed({ ...prevState, bars: nextBars, users: nextUsers });
+    }
+
 
     if (role === "seller") {
       await sendSellerApprovalRequestEmail({
@@ -497,4 +538,29 @@ export function me(req, res) {
     return res.status(401).json({ error: "Authentication required." });
   }
   return res.json({ ok: true, user });
+}
+
+
+export async function impersonateUser(req, res, next) {
+  try {
+    const targetUserId = String(req.params?.userId || "").trim();
+    if (!targetUserId) {
+      return res.status(400).json({ error: "userId is required." });
+    }
+    const target = await getUserById(targetUserId);
+    if (!target) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    if (target.accountStatus === "blocked") {
+      return res.status(403).json({ error: "Cannot impersonate a blocked user." });
+    }
+    const token = signAuthToken(buildAuthPayload(target));
+    return res.json({
+      ok: true,
+      token,
+      user: sanitizeUser(target),
+    });
+  } catch (error) {
+    return next(error);
+  }
 }
