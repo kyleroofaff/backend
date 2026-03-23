@@ -13,7 +13,6 @@ import {
 import { sendPlatformEmail, sendSellerApprovalRequestEmail } from "../services/mailer.js";
 import { dispatchPushNotification } from "../services/pushService.js";
 import { hashPassword, verifyPassword } from "../utils/password.js";
-import { getState, replaceStateAndSeed } from "../db/store.js";
 
 function sanitizeUser(user) {
   const rawAdminAccess = user?.adminAccess && typeof user.adminAccess === "object" ? user.adminAccess : {};
@@ -52,7 +51,7 @@ function getBlockedStatusError(user) {
 }
 
 function emailVerificationRequiredForRole(role) {
-  return ["buyer"].includes(String(role || "").trim().toLowerCase());
+  return ["buyer", "seller", "bar"].includes(String(role || "").trim().toLowerCase());
 }
 
 function getEmailVerificationError(user) {
@@ -174,6 +173,16 @@ export async function register(req, res, next) {
     const preferredLanguage = String(req.body?.preferredLanguage || "en").trim().toLowerCase();
     const acceptedRespectfulConduct = req.body?.acceptedRespectfulConduct === true;
     const acceptedNoRefunds = req.body?.acceptedNoRefunds === true;
+    const heightCm = role === "seller" ? (Number(req.body?.heightCm) || "") : "";
+    const weightKg = role === "seller" ? (Number(req.body?.weightKg) || "") : "";
+    const hairColor = role === "seller" ? String(req.body?.hairColor || "").trim() : "";
+    const braSize = role === "seller" ? String(req.body?.braSize || "").trim() : "";
+    const pantySize = role === "seller" ? String(req.body?.pantySize || "").trim() : "";
+    const skipEmailVerificationRequested = req.body?.skipEmailVerification === true;
+    const skipEmailVerification =
+      env.allowRegistrationSkipEmailVerification === true
+      && skipEmailVerificationRequested
+      && (role === "seller" || role === "bar");
 
     if (!role) {
       return res.status(400).json({ error: "role must be buyer, seller, or bar." });
@@ -194,6 +203,16 @@ export async function register(req, res, next) {
     if (role === "buyer" && (!acceptedRespectfulConduct || !acceptedNoRefunds)) {
       return res.status(400).json({ error: "Buyer terms must be accepted." });
     }
+    if (
+      skipEmailVerificationRequested
+      && (role === "seller" || role === "bar")
+      && env.allowRegistrationSkipEmailVerification !== true
+    ) {
+      return res.status(403).json({
+        error:
+          "skipEmailVerification is not enabled. Set ALLOW_REGISTRATION_SKIP_EMAIL_VERIFICATION=true in production."
+      });
+    }
 
     const existingUser = await getUserByEmail(email);
     if (existingUser) {
@@ -205,9 +224,40 @@ export async function register(req, res, next) {
     const verifyToken = crypto.randomBytes(24).toString("hex");
     const verifyExpiresAt = new Date(now.getTime() + 1000 * 60 * 60 * 24).toISOString();
     const userId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    const accountStatus = role === "seller" ? "pending" : "active";
+    // Sellers normally start as pending; when skipping email verification we activate so JWT auth works.
+    const accountStatus =
+      role === "seller" ? (skipEmailVerification ? "active" : "pending") : "active";
     const baseSlug = buildSlug(name, role === "bar" ? "new-bar" : "new-user");
     const barId = role === "bar" ? `${baseSlug}-${Math.random().toString(36).slice(2, 6)}` : null;
+
+    const profileBase = {
+      preferredLanguage,
+      notificationPreferences: getDefaultNotificationPreferences(role),
+      city,
+      country,
+      acceptedBuyerTermsAt:
+        role === "buyer" && acceptedRespectfulConduct && acceptedNoRefunds ? nowIso : undefined,
+      sellerApplicationAt: role === "seller" ? nowIso : undefined,
+      sellerApplicationStatus: role === "seller" ? "pending" : undefined,
+      requestedSellerSlug: role === "seller" ? buildSlug(name, "new-seller") : undefined,
+      heightCm: heightCm || undefined,
+      weightKg: weightKg || undefined,
+      hairColor: hairColor || undefined,
+      braSize: braSize || undefined,
+      pantySize: pantySize || undefined
+    };
+
+    if (skipEmailVerification) {
+      Object.assign(profileBase, {
+        emailVerified: true
+      });
+    } else {
+      Object.assign(profileBase, {
+        emailVerified: false,
+        emailVerificationToken: verifyToken,
+        emailVerificationExpiresAt: verifyExpiresAt
+      });
+    }
 
     await createUser({
       id: userId,
@@ -217,66 +267,15 @@ export async function register(req, res, next) {
       accountStatus,
       passwordHash: hashPassword(password),
       barId,
-      profile: {
-        preferredLanguage,
-        notificationPreferences: getDefaultNotificationPreferences(role),
-        emailVerified: (role === "seller" || role === "bar"),
-        emailVerificationToken: verifyToken,
-        emailVerificationExpiresAt: verifyExpiresAt,
-        city,
-        country,
-        acceptedBuyerTermsAt:
-          role === "buyer" && acceptedRespectfulConduct && acceptedNoRefunds ? nowIso : undefined,
-        sellerApplicationAt: role === "seller" ? nowIso : undefined,
-        sellerApplicationStatus: role === "seller" ? "pending" : undefined,
-        requestedSellerSlug: role === "seller" ? buildSlug(name, "new-seller") : undefined
-      }
+      profile: profileBase
     });
 
-    if (role !== "seller" && role !== "bar") {
+    if (!skipEmailVerification) {
       const emailResult = await sendVerificationEmail({ email, name, token: verifyToken });
       if (!emailResult?.delivered && env.nodeEnv === "production") {
         return res.status(502).json({ error: "Could not send verification email. Please try again." });
       }
     }
-
-    if (role === "bar" && barId) {
-      const prevState = getState();
-      const prevBars = Array.isArray(prevState.bars) ? prevState.bars : [];
-      const prevUsers = Array.isArray(prevState.users) ? prevState.users : [];
-
-      let nextBars = prevBars;
-      if (!prevBars.some((b) => String(b?.id || "").trim() === barId)) {
-        nextBars = [...prevBars, {
-          id: barId,
-          name: name || "",
-          location: [city, country].filter(Boolean).join(", "),
-          about: "",
-          specials: "",
-          mapEmbedUrl: "",
-          mapLink: "",
-          profileImage: "",
-          profileImageName: "",
-        }];
-      }
-
-      let nextUsers = prevUsers;
-      if (!prevUsers.some((u) => String(u?.id || "").trim() === userId)) {
-        nextUsers = [...prevUsers, {
-          id: userId,
-          email,
-          name,
-          role,
-          barId,
-          accountStatus: "active",
-          emailVerified: true,
-          preferredLanguage,
-        }];
-      }
-
-      await replaceStateAndSeed({ ...prevState, bars: nextBars, users: nextUsers });
-    }
-
 
     if (role === "seller") {
       await sendSellerApprovalRequestEmail({
@@ -310,6 +309,20 @@ export async function register(req, res, next) {
           userEmail: email
         }
       }).catch(() => {});
+    }
+
+    if (skipEmailVerification) {
+      const created = await getUserByEmail(email);
+      if (!created) {
+        return res.status(500).json({ error: "Account created but could not load user." });
+      }
+      const token = signAuthToken(buildAuthPayload(created));
+      return res.status(201).json({
+        ok: true,
+        message: "Account created.",
+        token,
+        user: sanitizeUser(created)
+      });
     }
 
     return res.status(201).json({
@@ -538,29 +551,4 @@ export function me(req, res) {
     return res.status(401).json({ error: "Authentication required." });
   }
   return res.json({ ok: true, user });
-}
-
-
-export async function impersonateUser(req, res, next) {
-  try {
-    const targetUserId = String(req.params?.userId || "").trim();
-    if (!targetUserId) {
-      return res.status(400).json({ error: "userId is required." });
-    }
-    const target = await getUserById(targetUserId);
-    if (!target) {
-      return res.status(404).json({ error: "User not found." });
-    }
-    if (target.accountStatus === "blocked") {
-      return res.status(403).json({ error: "Cannot impersonate a blocked user." });
-    }
-    const token = signAuthToken(buildAuthPayload(target));
-    return res.json({
-      ok: true,
-      token,
-      user: sanitizeUser(target),
-    });
-  } catch (error) {
-    return next(error);
-  }
 }

@@ -7,7 +7,8 @@ import {
   updateUserAdminAccessBySuperAdmin,
   updateOwnCredentials,
   updateUserCredentialsByAdmin,
-  verifyEmail, impersonateUser } from "../controllers/authController.js";
+  verifyEmail
+} from "../controllers/authController.js";
 import {
   pushConfig,
   subscribePush,
@@ -22,7 +23,6 @@ import {
   deleteProduct,
   deleteSellerPost,
   getBootstrap,
-  updateBarProfile,
   getAdminEmailInboxThreadMessages,
   getAdminEmailInboxThreads,
   downloadAdminEmailInboxAttachment,
@@ -87,7 +87,12 @@ router.post(
     "country",
     "preferredLanguage",
     "acceptedRespectfulConduct",
-    "acceptedNoRefunds"
+    "acceptedNoRefunds",
+    "heightCm",
+    "weightKg",
+    "hairColor",
+    "braSize",
+    "pantySize"
   ]),
   register
 );
@@ -122,11 +127,9 @@ router.post("/push/preferences", requireAuth, rejectUnknownBodyKeys(["push"]), u
 router.get("/bootstrap", getBootstrap);
 router.post("/state", requireAuth, requireSuperAdmin, requireNonProduction, idempotencyOptional, rejectUnknownBodyKeys(["db"]), saveState);
 router.post("/reset", requireAuth, requireSuperAdmin, requireNonProduction, idempotencyOptional, reset);
-router.post("/admin/impersonate/:userId", requireAuth, requireSuperAdmin, impersonateUser);
 router.get("/products", getProducts);
 router.delete("/products/:productId", requireAuth, requireRole("seller", "admin"), idempotencyOptional, rejectUnknownBodyKeys(["productTitle"]), deleteProduct);
 router.get("/sellers", getSellers);
-router.put("/bars/:barId", requireAuth, requireRole("bar", "admin"), idempotencyOptional, updateBarProfile);
 router.get("/seller-posts", getSellerPosts);
 router.post("/seller-posts", requireAuth, requireRole("seller"), idempotencyOptional, rejectUnknownBodyKeys(["image", "imageName", "caption", "captionI18n", "visibility", "accessPriceUsd"]), createSellerPost);
 router.delete("/seller-posts/:postId", requireAuth, requireRole("seller", "admin"), idempotencyOptional, deleteSellerPost);
