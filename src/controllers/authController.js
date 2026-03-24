@@ -229,6 +229,7 @@ export async function register(req, res, next) {
       role === "seller" ? (skipEmailVerification ? "active" : "pending") : "active";
     const baseSlug = buildSlug(name, role === "bar" ? "new-bar" : "new-user");
     const barId = role === "bar" ? `${baseSlug}-${Math.random().toString(36).slice(2, 6)}` : null;
+    const sellerId = role === "seller" ? `${buildSlug(name, "new-seller")}-${Math.random().toString(36).slice(2, 6)}` : null;
 
     const profileBase = {
       preferredLanguage,
@@ -238,7 +239,7 @@ export async function register(req, res, next) {
       acceptedBuyerTermsAt:
         role === "buyer" && acceptedRespectfulConduct && acceptedNoRefunds ? nowIso : undefined,
       sellerApplicationAt: role === "seller" ? nowIso : undefined,
-      sellerApplicationStatus: role === "seller" ? "pending" : undefined,
+      sellerApplicationStatus: role === "seller" ? (skipEmailVerification ? "active" : "pending") : undefined,
       requestedSellerSlug: role === "seller" ? buildSlug(name, "new-seller") : undefined,
       heightCm: heightCm || undefined,
       weightKg: weightKg || undefined,
@@ -267,6 +268,7 @@ export async function register(req, res, next) {
       accountStatus,
       passwordHash: hashPassword(password),
       barId,
+      sellerId,
       profile: profileBase
     });
 
