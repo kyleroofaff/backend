@@ -2275,3 +2275,57 @@ export async function sendBarMessage(req, res) {
   return res.status(201).json({ ok: true, message });
 }
 
+export async function toggleSellerFollowHandler(req, res) {
+  const user = req.auth?.user;
+  if (!user) return res.status(401).json({ error: "Authentication required." });
+  const sellerId = String(req.body?.sellerId || "").trim();
+  if (!sellerId) return res.status(400).json({ error: "sellerId is required." });
+
+  const state = getState();
+  const follows = Array.isArray(state.sellerFollows) ? state.sellerFollows : [];
+  const existing = follows.find((e) => e.sellerId === sellerId && e.followerUserId === user.id);
+
+  let nextFollows;
+  let following;
+  if (existing) {
+    nextFollows = follows.filter((e) => !(e.sellerId === sellerId && e.followerUserId === user.id));
+    following = false;
+  } else {
+    nextFollows = [
+      { id: `seller_follow_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, sellerId, followerUserId: user.id, followerRole: user.role, createdAt: new Date().toISOString() },
+      ...follows,
+    ];
+    following = true;
+  }
+
+  await replaceStateAndSeed({ ...state, sellerFollows: nextFollows });
+  return res.json({ ok: true, following });
+}
+
+export async function toggleBarFollowHandler(req, res) {
+  const user = req.auth?.user;
+  if (!user) return res.status(401).json({ error: "Authentication required." });
+  const barId = String(req.body?.barId || "").trim();
+  if (!barId) return res.status(400).json({ error: "barId is required." });
+
+  const state = getState();
+  const follows = Array.isArray(state.barFollows) ? state.barFollows : [];
+  const existing = follows.find((e) => e.barId === barId && e.followerUserId === user.id);
+
+  let nextFollows;
+  let following;
+  if (existing) {
+    nextFollows = follows.filter((e) => !(e.barId === barId && e.followerUserId === user.id));
+    following = false;
+  } else {
+    nextFollows = [
+      { id: `bar_follow_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, barId, followerUserId: user.id, followerRole: user.role, createdAt: new Date().toISOString() },
+      ...follows,
+    ];
+    following = true;
+  }
+
+  await replaceStateAndSeed({ ...state, barFollows: nextFollows });
+  return res.json({ ok: true, following });
+}
+

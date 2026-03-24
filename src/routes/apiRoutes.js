@@ -62,7 +62,9 @@ import {
   createProduct,
   createAffiliationRequest,
   respondToAffiliationRequest,
-  sendBarMessage
+  sendBarMessage,
+  toggleSellerFollowHandler,
+  toggleBarFollowHandler
 } from "../controllers/marketplaceController.js";
 import {
   ADMIN_SCOPES,
@@ -192,6 +194,8 @@ router.post(
   rejectUnknownBodyKeys(["conversationId", "body", "barId", "participantRole", "participantUserId", "sourceLanguage", "translations"]),
   sendBarMessage
 );
+router.post("/seller-follows/toggle", requireAuth, requireRole("buyer"), idempotencyOptional, rejectUnknownBodyKeys(["sellerId"]), toggleSellerFollowHandler);
+router.post("/bar-follows/toggle", requireAuth, idempotencyOptional, rejectUnknownBodyKeys(["barId"]), toggleBarFollowHandler);
 router.post("/notifications/seller-approval-request", requireAuth, requireAdminScope(ADMIN_SCOPES.AUTH_REVIEW), idempotencyOptional, rejectUnknownBodyKeys(["sellerName", "sellerEmail", "requestedAt"]), notifySellerApprovalRequest);
 router.post("/notifications/platform-email", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), idempotencyOptional, rejectUnknownBodyKeys(["toEmail", "toName", "subject", "text", "body", "templateKey", "actionUrl", "fromEmail", "replyToEmail", "attachments"]), notifyPlatformEmail);
 router.post("/notifications/dispatch", requireAuth, requireAdminAccess, idempotencyOptional, rejectUnknownBodyKeys(["recipientUserIds", "preferenceType", "route", "titleByLang", "bodyByLang", "sendEmail", "emailSubject", "emailText", "kind"]), dispatchManagedNotification);
