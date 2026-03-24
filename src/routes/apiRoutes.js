@@ -131,7 +131,7 @@ router.get("/products", getProducts);
 router.delete("/products/:productId", requireAuth, requireRole("seller", "admin"), idempotencyOptional, rejectUnknownBodyKeys(["productTitle"]), deleteProduct);
 router.get("/sellers", getSellers);
 router.get("/seller-posts", getSellerPosts);
-router.post("/seller-posts", requireAuth, requireRole("seller"), idempotencyOptional, rejectUnknownBodyKeys(["image", "imageName", "caption", "captionI18n", "visibility", "accessPriceUsd"]), createSellerPost);
+router.post("/seller-posts", requireAuth, requireRole("seller"), idempotencyOptional, rejectUnknownBodyKeys(["image", "imageName", "caption", "captionI18n", "visibility", "accessPriceUsd", "scheduledFor"]), createSellerPost);
 router.delete("/seller-posts/:postId", requireAuth, requireRole("seller", "admin"), idempotencyOptional, deleteSellerPost);
 router.post("/seller-posts/:postId/report", requireAuth, requireRole("buyer", "seller", "admin"), idempotencyOptional, rejectUnknownBodyKeys(["reason"]), reportSellerPost);
 router.get("/seller-post-reports", requireAuth, requireAdminScope(ADMIN_SCOPES.PRODUCTS_MODERATE), getPostReports);

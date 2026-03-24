@@ -1405,6 +1405,12 @@ export async function createSellerPost(req, res, next) {
       ? Number(parsedAccessPrice.toFixed(2))
       : 1;
 
+    const rawScheduledFor = String(req.body?.scheduledFor || "").trim();
+    const scheduledForMs = rawScheduledFor ? new Date(rawScheduledFor).getTime() : NaN;
+    const scheduledFor = Number.isFinite(scheduledForMs) && scheduledForMs > Date.now()
+      ? new Date(scheduledForMs).toISOString()
+      : "";
+
     if (!sellerId || !image) {
       return res.status(400).json({ error: "sellerId and image are required." });
     }
@@ -1414,6 +1420,7 @@ export async function createSellerPost(req, res, next) {
       return res.status(404).json({ error: "Seller not found." });
     }
 
+    const now = new Date().toISOString();
     const post = {
       id: `post_${Date.now()}`,
       sellerId,
@@ -1423,7 +1430,8 @@ export async function createSellerPost(req, res, next) {
       accessPriceUsd,
       image,
       imageName,
-      createdAt: new Date().toISOString()
+      scheduledFor,
+      createdAt: scheduledFor || now,
     };
 
     const result = await createSellerPostInStateAndSeed(post);
