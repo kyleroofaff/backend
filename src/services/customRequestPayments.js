@@ -4,9 +4,9 @@ import { dispatchPushNotification } from "./pushService.js";
 
 const MIN_WALLET_TOP_UP_THB = 500;
 const SALE_SPLIT = {
-  sellerWithBar: 0.7,
-  sellerWithoutBar: 0.8,
-  bar: 0.1
+  sellerWithBar: 0.34,
+  sellerWithoutBar: 0.5,
+  bar: 0.33
 };
 
 function requiredTopUp(shortfall) {
