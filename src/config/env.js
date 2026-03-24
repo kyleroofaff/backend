@@ -45,5 +45,7 @@ export const env = {
   trustProxy: parseTrustProxyValue(process.env.TRUST_PROXY, nodeEnv),
   allowLegacyPlaintextPasswords:
     process.env.ALLOW_LEGACY_PLAINTEXT_PASSWORDS === "true"
-    || (process.env.ALLOW_LEGACY_PLAINTEXT_PASSWORDS == null && nodeEnv !== "production")
+    || (process.env.ALLOW_LEGACY_PLAINTEXT_PASSWORDS == null && nodeEnv !== "production"),
+  allowRegistrationSkipEmailVerification:
+    process.env.ALLOW_REGISTRATION_SKIP_EMAIL_VERIFICATION === "true"
 };
