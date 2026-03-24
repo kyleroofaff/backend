@@ -1,4 +1,4 @@
-import { getState, replaceStateAndSeed } from "../db/store.js";
+import { getState, replaceStateAndSeed, upsertUserInState } from "../db/store.js";
 import { hasPostgresConfig, pgQuery } from "../db/postgres.js";
 
 const KNOWN_ADMIN_SCOPES = new Set([
@@ -88,7 +88,7 @@ function parseProfile(rawProfile) {
   }
 }
 
-function mapPostgresUser(row) {
+export function mapPostgresUser(row) {
   if (!row) return null;
   const profile = parseProfile(row.profile);
   const role = row.role || "";
@@ -197,7 +197,9 @@ export async function updateUserCredentialsById(userId, { email, passwordHash } 
        RETURNING id, email, name, role, seller_id, bar_id, account_status, password_hash, profile`,
       [normalizedUserId, nextEmail, nextPasswordHash]
     );
-    return mapPostgresUser(result.rows[0] || null);
+    const mapped = mapPostgresUser(result.rows[0] || null);
+    if (mapped) upsertUserInState(mapped);
+    return mapped;
   }
 
   const state = getState();
@@ -273,7 +275,9 @@ export async function createUser({
         JSON.stringify(nextProfile)
       ]
     );
-    return mapPostgresUser(result.rows[0] || null);
+    const mapped = mapPostgresUser(result.rows[0] || null);
+    if (mapped) upsertUserInState(mapped);
+    return mapped;
   }
 
   const state = getState();
@@ -344,7 +348,9 @@ export async function updateUserAdminAccessById(userId, adminAccess = {}) {
        WHERE id = $1`,
       [normalizedUserId, JSON.stringify(profile)]
     );
-    return getUserById(normalizedUserId);
+    const refreshed = await getUserById(normalizedUserId);
+    if (refreshed) upsertUserInState(refreshed);
+    return refreshed;
   }
 
   const state = getState();
@@ -411,6 +417,7 @@ export async function verifyUserEmailToken(email, token) {
       [row.id, JSON.stringify(nextProfile)]
     );
     const refreshedUser = await getUserById(row.id);
+    if (refreshedUser) upsertUserInState(refreshedUser);
     return { ok: true, user: refreshedUser };
   }
 
@@ -476,7 +483,9 @@ export async function setUserEmailVerificationToken(email, token, expiresAt) {
        WHERE id = $1`,
       [row.id, JSON.stringify(nextProfile)]
     );
-    return getUserById(row.id);
+    const refreshed = await getUserById(row.id);
+    if (refreshed) upsertUserInState(refreshed);
+    return refreshed;
   }
 
   const state = getState();
@@ -540,6 +549,7 @@ export async function updateUserPushPreferences(userId, pushPatch = {}) {
       [normalizedUserId, JSON.stringify(profile)]
     );
     const refreshed = await getUserById(normalizedUserId);
+    if (refreshed) upsertUserInState(refreshed);
     return refreshed;
   }
 
@@ -564,4 +574,14 @@ export async function updateUserPushPreferences(userId, pushPatch = {}) {
   };
   await replaceStateAndSeed(nextState);
   return getUserById(normalizedUserId);
+}
+
+export async function listAllPostgresUsers() {
+  if (!hasPostgresConfig()) return [];
+  const result = await pgQuery(
+    `SELECT id, email, name, role, seller_id, bar_id, account_status, password_hash, profile
+     FROM app_users
+     ORDER BY id`
+  );
+  return result.rows.map(mapPostgresUser).filter(Boolean);
 }

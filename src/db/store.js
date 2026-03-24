@@ -11,6 +11,38 @@ export function getState() {
   return dbState;
 }
 
+export function upsertUserInState(user) {
+  if (!user || !user.id) return;
+  const users = Array.isArray(dbState.users) ? [...dbState.users] : [];
+  const idx = users.findIndex((u) => u.id === user.id);
+  if (idx >= 0) {
+    users[idx] = { ...users[idx], ...user };
+  } else {
+    users.push(user);
+  }
+  dbState = { ...dbState, users };
+}
+
+export function bulkReplaceUsersInState(pgUsers) {
+  if (!Array.isArray(pgUsers)) return;
+  const stateUsers = Array.isArray(dbState.users) ? dbState.users : [];
+  const stateById = new Map(stateUsers.map((u) => [u.id, u]));
+  const merged = [];
+  const seen = new Set();
+  for (const pgUser of pgUsers) {
+    if (!pgUser?.id) continue;
+    seen.add(pgUser.id);
+    const existing = stateById.get(pgUser.id);
+    merged.push(existing ? { ...existing, ...pgUser } : pgUser);
+  }
+  for (const stateUser of stateUsers) {
+    if (stateUser?.id && !seen.has(stateUser.id)) {
+      merged.push(stateUser);
+    }
+  }
+  dbState = { ...dbState, users: merged };
+}
+
 export function resetState() {
   dbState = structuredClone(seedData);
   return dbState;
