@@ -97,6 +97,7 @@ router.post(
     "preferredLanguage",
     "acceptedRespectfulConduct",
     "acceptedNoRefunds",
+    "skipEmailVerification",
     "heightCm",
     "weightKg",
     "hairColor",
