@@ -55,7 +55,14 @@ import {
   sendAdminEmailInboxMessage,
   upsertEmailSuppression,
   removeEmailSuppression,
-  updateAdminEmailInboxThreadStatus
+  updateAdminEmailInboxThreadStatus,
+  updateBarProfile,
+  approveSellerByAdmin,
+  updateSellerProfile,
+  createProduct,
+  createAffiliationRequest,
+  respondToAffiliationRequest,
+  sendBarMessage
 } from "../controllers/marketplaceController.js";
 import {
   ADMIN_SCOPES,
@@ -130,12 +137,61 @@ router.post("/reset", requireAuth, requireSuperAdmin, requireNonProduction, idem
 router.get("/products", getProducts);
 router.delete("/products/:productId", requireAuth, requireRole("seller", "admin"), idempotencyOptional, rejectUnknownBodyKeys(["productTitle"]), deleteProduct);
 router.get("/sellers", getSellers);
+router.put("/bars/:barId", requireAuth, requireRole("bar", "admin"), rejectUnknownBodyKeys(["name", "location", "about", "specials", "mapEmbedUrl", "mapLink", "profileImage", "profileImageName", "aboutI18n", "specialsI18n"]), updateBarProfile);
+router.put(
+  "/sellers/:sellerId",
+  requireAuth,
+  rejectUnknownBodyKeys([
+    "profileImage", "profileImageName", "location", "locationI18n",
+    "specialties", "specialtyI18n", "bio", "bioI18n",
+    "shipping", "shippingI18n", "turnaround", "turnaroundI18n",
+    "languages", "height", "weight", "hairColor", "braSize", "pantySize",
+    "affiliatedBarId", "feedVisibility"
+  ]),
+  updateSellerProfile
+);
+router.post(
+  "/products",
+  requireAuth,
+  requireRole("seller"),
+  idempotencyOptional,
+  rejectUnknownBodyKeys(["id", "title", "description", "priceTHB", "image", "imageName", "category", "status", "wearDays", "extras"]),
+  createProduct
+);
 router.get("/seller-posts", getSellerPosts);
 router.post("/seller-posts", requireAuth, requireRole("seller"), idempotencyOptional, rejectUnknownBodyKeys(["image", "imageName", "caption", "captionI18n", "visibility", "accessPriceUsd", "scheduledFor"]), createSellerPost);
 router.delete("/seller-posts/:postId", requireAuth, requireRole("seller", "admin"), idempotencyOptional, deleteSellerPost);
 router.post("/seller-posts/:postId/report", requireAuth, requireRole("buyer", "seller", "admin"), idempotencyOptional, rejectUnknownBodyKeys(["reason"]), reportSellerPost);
 router.get("/seller-post-reports", requireAuth, requireAdminScope(ADMIN_SCOPES.PRODUCTS_MODERATE), getPostReports);
 router.post("/seller-post-reports/:reportId/resolve", requireAuth, requireAdminScope(ADMIN_SCOPES.PRODUCTS_MODERATE), idempotencyOptional, resolvePostReport);
+router.post(
+  "/admin/users/:userId/approve-seller",
+  requireAuth,
+  requireAdminScope(ADMIN_SCOPES.AUTH_REVIEW),
+  idempotencyOptional,
+  approveSellerByAdmin
+);
+router.post(
+  "/affiliation-requests",
+  requireAuth,
+  idempotencyOptional,
+  rejectUnknownBodyKeys(["id", "sellerId", "barId", "direction", "targetBarUserIds", "sellerMessage", "sellerImages"]),
+  createAffiliationRequest
+);
+router.patch(
+  "/affiliation-requests/:requestId",
+  requireAuth,
+  idempotencyOptional,
+  rejectUnknownBodyKeys(["decision"]),
+  respondToAffiliationRequest
+);
+router.post(
+  "/messages/bar-send",
+  requireAuth,
+  idempotencyOptional,
+  rejectUnknownBodyKeys(["conversationId", "body", "barId", "participantRole", "participantUserId", "sourceLanguage", "translations"]),
+  sendBarMessage
+);
 router.post("/notifications/seller-approval-request", requireAuth, requireAdminScope(ADMIN_SCOPES.AUTH_REVIEW), idempotencyOptional, rejectUnknownBodyKeys(["sellerName", "sellerEmail", "requestedAt"]), notifySellerApprovalRequest);
 router.post("/notifications/platform-email", requireAuth, requireAdminScope(ADMIN_SCOPES.EMAIL_INBOX_MANAGE), idempotencyOptional, rejectUnknownBodyKeys(["toEmail", "toName", "subject", "text", "body", "templateKey", "actionUrl", "fromEmail", "replyToEmail", "attachments"]), notifyPlatformEmail);
 router.post("/notifications/dispatch", requireAuth, requireAdminAccess, idempotencyOptional, rejectUnknownBodyKeys(["recipientUserIds", "preferenceType", "route", "titleByLang", "bodyByLang", "sendEmail", "emailSubject", "emailText", "kind"]), dispatchManagedNotification);

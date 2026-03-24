@@ -7,6 +7,7 @@ import {
   getSellerPostsState,
   getState,
   replaceState,
+  replaceStateAndSeed,
   resolvePostReportInStateAndSeed,
   resetState
 } from "../db/store.js";
@@ -19,6 +20,7 @@ import { payCheckoutWithWallet, topUpWallet } from "../services/walletCommerce.j
 import { createBuyerCustomRequest, sendBuyerPaidMessage } from "../services/buyerMoneyFlows.js";
 import { env } from "../config/env.js";
 import { getUserById } from "../repositories/userRepository.js";
+import { hasPostgresConfig, pgQuery } from "../db/postgres.js";
 
 const SUPPORTED_TRANSLATION_LANGUAGES = new Set(["en", "th", "my", "ru"]);
 const PAYOUT_SCHEDULE = "monthly";
@@ -1991,5 +1993,285 @@ export async function updateBarProfile(req, res) {
 
   await replaceStateAndSeed({ ...state, bars: nextBars });
   return res.json({ ok: true, bar: barRecord });
+}
+
+
+function buildSlug(value, fallback) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || fallback || "item";
+}
+
+export async function approveSellerByAdmin(req, res) {
+  const userId = String(req.params?.userId || "").trim();
+  if (!userId) return res.status(400).json({ error: "User ID is required." });
+
+  const state = getState();
+  const users = Array.isArray(state.users) ? state.users : [];
+  const targetUser = users.find((u) => u.id === userId);
+  if (!targetUser) return res.status(404).json({ error: "User not found." });
+  if (targetUser.role !== "seller") return res.status(400).json({ error: "User is not a seller." });
+  if (targetUser.accountStatus === "active" && targetUser.sellerId) {
+    return res.json({ ok: true, sellerId: targetUser.sellerId, alreadyApproved: true });
+  }
+
+  const slugBase = targetUser.requestedSellerSlug || buildSlug(targetUser.name, "new-seller");
+  let sellerId = targetUser.sellerId || slugBase;
+  const existingSellers = Array.isArray(state.sellers) ? state.sellers : [];
+  if (!targetUser.sellerId) {
+    let count = 1;
+    while (existingSellers.some((s) => s.id === sellerId)) {
+      count += 1;
+      sellerId = `${slugBase}-${count}`;
+    }
+  }
+
+  const now = new Date().toISOString();
+  const sellerAlreadyExists = existingSellers.some((s) => s.id === sellerId);
+  const nextSellers = sellerAlreadyExists
+    ? existingSellers
+    : [
+        ...existingSellers,
+        {
+          id: sellerId,
+          name: `${targetUser.name} Studio`,
+          location: [targetUser.city, targetUser.country].filter(Boolean).join(", ") || "",
+          specialty: "Everyday",
+          specialties: ["Everyday"],
+          bio: "",
+          shipping: "Worldwide",
+          turnaround: "Ships in 1-3 days",
+          isOnline: false,
+          feedVisibility: "public",
+          languages: ["English"],
+          highlights: ["New seller"],
+          portfolioUrl: "",
+          height: targetUser.heightCm || targetUser.height || "",
+          weight: targetUser.weightKg || targetUser.weight || "",
+          hairColor: targetUser.hairColor || "",
+          braSize: targetUser.braSize || "",
+          pantySize: targetUser.pantySize || "",
+        },
+      ];
+
+  const nextUsers = users.map((u) =>
+    u.id === userId
+      ? { ...u, accountStatus: "active", sellerId, approvedAt: now, sellerApplicationStatus: "approved" }
+      : u
+  );
+
+  await replaceStateAndSeed({ ...state, users: nextUsers, sellers: nextSellers });
+
+  if (hasPostgresConfig()) {
+    try {
+      await pgQuery(
+        `UPDATE app_users SET seller_id = $1, account_status = 'active', updated_at = NOW() WHERE id = $2`,
+        [sellerId, userId]
+      );
+    } catch (_pgErr) { /* JSON state is source of truth; Postgres is best-effort */ }
+  }
+
+  return res.json({ ok: true, sellerId });
+}
+
+export async function updateSellerProfile(req, res) {
+  const sellerId = String(req.params?.sellerId || "").trim();
+  if (!sellerId) return res.status(400).json({ error: "Seller ID is required." });
+  const user = req.auth?.user;
+  const isAdmin = user?.role === "admin" || user?.isSuperAdmin === true || user?.hasAdminAccess === true;
+  if (!user || (user.role !== "seller" && !isAdmin)) {
+    return res.status(403).json({ error: "Only seller or admin accounts can update seller profiles." });
+  }
+  if (!isAdmin && String(user.sellerId || "").trim() !== sellerId) {
+    return res.status(403).json({ error: "You can only update your own seller profile." });
+  }
+
+  const body = req.body || {};
+  const state = getState();
+  const existingSellers = Array.isArray(state.sellers) ? state.sellers : [];
+  const sellerIndex = existingSellers.findIndex((s) => String(s?.id || "").trim() === sellerId);
+
+  const profileImage = String(body.profileImage || "").slice(0, 2 * 1024 * 1024);
+  const specialties = Array.isArray(body.specialties) ? body.specialties.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 8) : undefined;
+  const languages = Array.isArray(body.languages) ? body.languages.map((v) => String(v || "").trim()).filter(Boolean) : undefined;
+
+  const patch = {
+    ...(body.location !== undefined ? { location: String(body.location || "").trim() } : {}),
+    ...(body.locationI18n && typeof body.locationI18n === "object" ? { locationI18n: body.locationI18n } : {}),
+    ...(specialties ? { specialties, specialty: specialties.join(" · ") || "" } : {}),
+    ...(body.specialtyI18n && typeof body.specialtyI18n === "object" ? { specialtyI18n: body.specialtyI18n } : {}),
+    ...(body.bio !== undefined ? { bio: String(body.bio || "").trim() } : {}),
+    ...(body.bioI18n && typeof body.bioI18n === "object" ? { bioI18n: body.bioI18n } : {}),
+    ...(body.shipping !== undefined ? { shipping: String(body.shipping || "").trim() } : {}),
+    ...(body.shippingI18n && typeof body.shippingI18n === "object" ? { shippingI18n: body.shippingI18n } : {}),
+    ...(body.turnaround !== undefined ? { turnaround: String(body.turnaround || "").trim() } : {}),
+    ...(body.turnaroundI18n && typeof body.turnaroundI18n === "object" ? { turnaroundI18n: body.turnaroundI18n } : {}),
+    ...(languages ? { languages } : {}),
+    ...(profileImage ? { profileImage } : {}),
+    ...(body.profileImageName !== undefined ? { profileImageName: String(body.profileImageName || "").trim() } : {}),
+    ...(body.height !== undefined ? { height: body.height } : {}),
+    ...(body.weight !== undefined ? { weight: body.weight } : {}),
+    ...(body.hairColor !== undefined ? { hairColor: String(body.hairColor || "").trim() } : {}),
+    ...(body.braSize !== undefined ? { braSize: String(body.braSize || "").trim() } : {}),
+    ...(body.pantySize !== undefined ? { pantySize: String(body.pantySize || "").trim() } : {}),
+    ...(body.affiliatedBarId !== undefined ? { affiliatedBarId: String(body.affiliatedBarId || "").trim() } : {}),
+    ...(body.feedVisibility !== undefined ? { feedVisibility: String(body.feedVisibility || "public").trim() } : {}),
+  };
+
+  let nextSellers;
+  if (sellerIndex >= 0) {
+    nextSellers = existingSellers.map((s, i) => (i === sellerIndex ? { ...s, ...patch } : s));
+  } else {
+    nextSellers = [...existingSellers, { id: sellerId, name: user.name || "", ...patch }];
+  }
+
+  await replaceStateAndSeed({ ...state, sellers: nextSellers });
+  return res.json({ ok: true, seller: nextSellers.find((s) => s.id === sellerId) });
+}
+
+export async function createProduct(req, res) {
+  const user = req.auth?.user;
+  if (!user || user.role !== "seller") return res.status(403).json({ error: "Only sellers can create products." });
+  const sellerId = String(user.sellerId || "").trim();
+  if (!sellerId) return res.status(400).json({ error: "Seller profile not set up yet." });
+
+  const body = req.body || {};
+  const title = String(body.title || "").trim();
+  if (!title) return res.status(400).json({ error: "Product title is required." });
+  const priceTHB = Number(body.priceTHB);
+  if (!Number.isFinite(priceTHB) || priceTHB <= 0) return res.status(400).json({ error: "Valid price is required." });
+
+  const productId = body.id || `product_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const image = String(body.image || "").slice(0, 2 * 1024 * 1024);
+
+  const product = {
+    id: productId,
+    sellerId,
+    title,
+    description: String(body.description || "").trim(),
+    priceTHB: Number(priceTHB.toFixed(2)),
+    image,
+    imageName: String(body.imageName || "").trim(),
+    category: String(body.category || "panties").trim(),
+    status: String(body.status || "Draft").trim(),
+    wearDays: body.wearDays || null,
+    extras: Array.isArray(body.extras) ? body.extras : [],
+    createdAt: new Date().toISOString(),
+  };
+
+  const state = getState();
+  const nextProducts = [product, ...(Array.isArray(state.products) ? state.products : [])];
+  await replaceStateAndSeed({ ...state, products: nextProducts });
+  return res.status(201).json({ ok: true, product });
+}
+
+export async function createAffiliationRequest(req, res) {
+  const user = req.auth?.user;
+  if (!user) return res.status(401).json({ error: "Authentication required." });
+
+  const body = req.body || {};
+  const sellerId = String(body.sellerId || "").trim();
+  const barId = String(body.barId || "").trim();
+  const direction = String(body.direction || "seller_to_bar").trim();
+  if (!sellerId || !barId) return res.status(400).json({ error: "sellerId and barId are required." });
+
+  const requestId = body.id || `bar_affiliation_request_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const now = new Date().toISOString();
+
+  const request = {
+    id: requestId,
+    direction,
+    sellerId,
+    barId,
+    targetBarUserIds: Array.isArray(body.targetBarUserIds) ? body.targetBarUserIds : [],
+    requestedByUserId: user.id,
+    requestedByRole: user.role,
+    status: "pending",
+    sellerMessage: String(body.sellerMessage || "").trim(),
+    sellerImages: Array.isArray(body.sellerImages) ? body.sellerImages.map((img) => String(img || "").slice(0, 2 * 1024 * 1024)) : [],
+    createdAt: now,
+    respondedAt: null,
+    respondedByUserId: null,
+  };
+
+  const state = getState();
+  const nextRequests = [request, ...(Array.isArray(state.barAffiliationRequests) ? state.barAffiliationRequests : [])];
+  await replaceStateAndSeed({ ...state, barAffiliationRequests: nextRequests });
+  return res.status(201).json({ ok: true, request });
+}
+
+export async function respondToAffiliationRequest(req, res) {
+  const user = req.auth?.user;
+  if (!user) return res.status(401).json({ error: "Authentication required." });
+
+  const requestId = String(req.params?.requestId || "").trim();
+  if (!requestId) return res.status(400).json({ error: "Request ID is required." });
+
+  const decision = String(req.body?.decision || "").trim();
+  if (!["approved", "rejected", "cancelled"].includes(decision)) {
+    return res.status(400).json({ error: "decision must be approved, rejected, or cancelled." });
+  }
+
+  const state = getState();
+  const requests = Array.isArray(state.barAffiliationRequests) ? state.barAffiliationRequests : [];
+  const existing = requests.find((r) => r.id === requestId);
+  if (!existing) return res.status(404).json({ error: "Affiliation request not found." });
+
+  const now = new Date().toISOString();
+  let nextSellers = Array.isArray(state.sellers) ? [...state.sellers] : [];
+
+  if (decision === "approved") {
+    nextSellers = nextSellers.map((s) =>
+      s.id === existing.sellerId ? { ...s, affiliatedBarId: existing.barId } : s
+    );
+  }
+
+  const nextRequests = requests.map((r) =>
+    r.id === requestId
+      ? { ...r, status: decision, respondedAt: now, respondedByUserId: user.id }
+      : r
+  );
+
+  await replaceStateAndSeed({ ...state, barAffiliationRequests: nextRequests, sellers: nextSellers });
+  return res.json({ ok: true, requestId, decision });
+}
+
+export async function sendBarMessage(req, res) {
+  const user = req.auth?.user;
+  if (!user) return res.status(401).json({ error: "Authentication required." });
+
+  const body = req.body || {};
+  const conversationId = String(body.conversationId || "").trim();
+  const messageBody = String(body.body || "").trim();
+  const barId = String(body.barId || "").trim();
+  if (!conversationId || !messageBody || !barId) {
+    return res.status(400).json({ error: "conversationId, body, and barId are required." });
+  }
+
+  const now = new Date().toISOString();
+  const message = {
+    id: `bar_msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    conversationId,
+    barId,
+    participantRole: String(body.participantRole || "").trim(),
+    participantUserId: String(body.participantUserId || "").trim(),
+    senderId: user.id,
+    senderRole: user.role,
+    body: messageBody,
+    bodyOriginal: messageBody,
+    sourceLanguage: String(body.sourceLanguage || "en").trim(),
+    translations: body.translations && typeof body.translations === "object" ? body.translations : {},
+    feeCharged: 0,
+    createdAt: now,
+    readByBar: user.role === "bar",
+    readByParticipant: user.role !== "bar",
+  };
+
+  const state = getState();
+  const nextMessages = [...(Array.isArray(state.messages) ? state.messages : []), message];
+  await replaceStateAndSeed({ ...state, messages: nextMessages });
+  return res.status(201).json({ ok: true, message });
 }
 
