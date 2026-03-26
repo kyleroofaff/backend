@@ -179,10 +179,8 @@ export async function register(req, res, next) {
     const braSize = role === "seller" ? String(req.body?.braSize || "").trim() : "";
     const pantySize = role === "seller" ? String(req.body?.pantySize || "").trim() : "";
     const skipEmailVerificationRequested = req.body?.skipEmailVerification === true;
-    const skipEmailVerification =
-      env.allowRegistrationSkipEmailVerification === true
-      && skipEmailVerificationRequested
-      && (role === "seller" || role === "bar");
+    // Sellers and bars are always auto-approved on registration — no email verification step required.
+    const skipEmailVerification = role === "seller" || role === "bar";
 
     if (!role) {
       return res.status(400).json({ error: "role must be buyer, seller, or bar." });
@@ -203,16 +201,6 @@ export async function register(req, res, next) {
     if (role === "buyer" && (!acceptedRespectfulConduct || !acceptedNoRefunds)) {
       return res.status(400).json({ error: "Buyer terms must be accepted." });
     }
-    if (
-      skipEmailVerificationRequested
-      && (role === "seller" || role === "bar")
-      && env.allowRegistrationSkipEmailVerification !== true
-    ) {
-      return res.status(403).json({
-        error:
-          "skipEmailVerification is not enabled. Set ALLOW_REGISTRATION_SKIP_EMAIL_VERIFICATION=true in production."
-      });
-    }
 
     const existingUser = await getUserByEmail(email);
     if (existingUser) {
@@ -224,9 +212,8 @@ export async function register(req, res, next) {
     const verifyToken = crypto.randomBytes(24).toString("hex");
     const verifyExpiresAt = new Date(now.getTime() + 1000 * 60 * 60 * 24).toISOString();
     const userId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    // Sellers normally start as pending; when skipping email verification we activate so JWT auth works.
-    const accountStatus =
-      role === "seller" ? (skipEmailVerification ? "active" : "pending") : "active";
+    // Sellers and bars are always active; buyers start active too (no email verification required).
+    const accountStatus = "active";
     const baseSlug = buildSlug(name, role === "bar" ? "new-bar" : "new-user");
     const barId = role === "bar" ? `${baseSlug}-${Math.random().toString(36).slice(2, 6)}` : null;
     const sellerId = role === "seller" ? `${buildSlug(name, "new-seller")}-${Math.random().toString(36).slice(2, 6)}` : null;
