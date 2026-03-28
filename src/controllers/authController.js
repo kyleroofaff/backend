@@ -13,6 +13,7 @@ import {
 import { sendPlatformEmail, sendSellerApprovalRequestEmail } from "../services/mailer.js";
 import { dispatchPushNotification } from "../services/pushService.js";
 import { hashPassword, verifyPassword } from "../utils/password.js";
+import { getState, replaceStateAndSeed, upsertUserInState } from "../db/store.js";
 
 function sanitizeUser(user) {
   const rawAdminAccess = user?.adminAccess && typeof user.adminAccess === "object" ? user.adminAccess : {};
@@ -26,6 +27,8 @@ function sanitizeUser(user) {
           ? rawAdminAccess.scopes.map((scope) => String(scope || "").trim()).filter(Boolean)
           : []
       };
+  // Pull profile fields from the nested profile object (Postgres) or top-level (in-memory seed)
+  const profile = user?.profile && typeof user.profile === "object" ? user.profile : {};
   return {
     id: user.id,
     email: user.email,
@@ -38,6 +41,15 @@ function sanitizeUser(user) {
     adminAccess,
     isSuperAdmin: adminAccess.level === "super",
     hasAdminAccess: adminAccess.enabled === true || adminAccess.level === "super",
+    // Profile fields (from profile JSONB on Postgres, or top-level on seed users)
+    city: profile.city || user.city || "",
+    country: profile.country || user.country || "",
+    heightCm: profile.heightCm || user.heightCm || user.height || "",
+    weightKg: profile.weightKg || user.weightKg || user.weight || "",
+    hairColor: profile.hairColor || user.hairColor || "",
+    braSize: profile.braSize || user.braSize || "",
+    pantySize: profile.pantySize || user.pantySize || "",
+    preferredLanguage: profile.preferredLanguage || user.preferredLanguage || "en",
   };
 }
 
@@ -305,6 +317,69 @@ export async function register(req, res, next) {
       if (!created) {
         return res.status(500).json({ error: "Account created but could not load user." });
       }
+
+      // Sync new seller/bar into in-memory state so barMap/sellerMap are populated immediately
+      try {
+        const state = getState();
+        // Flatten profile fields onto the user object for in-memory compatibility
+        const stateUser = {
+          ...created,
+          ...(created.profile && typeof created.profile === "object" ? created.profile : {}),
+        };
+        upsertUserInState(stateUser);
+
+        if (role === "seller" && sellerId) {
+          const existingSellers = Array.isArray(state.sellers) ? state.sellers : [];
+          if (!existingSellers.some((s) => s.id === sellerId)) {
+            const profile = created.profile || {};
+            const newSeller = {
+              id: sellerId,
+              name: `${name} Studio`,
+              location: [profile.city || city, profile.country || country].filter(Boolean).join(", "),
+              specialty: "Everyday",
+              specialties: ["Everyday"],
+              bio: "",
+              shipping: "Worldwide",
+              turnaround: "Ships in 1-3 days",
+              isOnline: false,
+              feedVisibility: "public",
+              languages: ["English"],
+              highlights: ["New seller"],
+              portfolioUrl: "",
+              height: profile.heightCm || heightCm || "",
+              weight: profile.weightKg || weightKg || "",
+              hairColor: profile.hairColor || hairColor || "",
+              braSize: profile.braSize || braSize || "",
+              pantySize: profile.pantySize || pantySize || "",
+            };
+            await replaceStateAndSeed({ ...state, sellers: [...existingSellers, newSeller] });
+          }
+        }
+
+        if (role === "bar" && barId) {
+          const latestState = getState();
+          const existingBars = Array.isArray(latestState.bars) ? latestState.bars : [];
+          if (!existingBars.some((b) => b.id === barId)) {
+            const newBar = {
+              id: barId,
+              name,
+              location: [city, country].filter(Boolean).join(", "),
+              about: "",
+              specials: "",
+              mapEmbedUrl: "",
+              mapLink: "",
+              profileImage: "",
+              profileImageName: "",
+              aboutI18n: {},
+              specialsI18n: {},
+            };
+            await replaceStateAndSeed({ ...latestState, bars: [...existingBars, newBar] });
+          }
+        }
+      } catch (_stateErr) {
+        // State sync is best-effort; don't fail the registration response
+      }
+
       const token = signAuthToken(buildAuthPayload(created));
       return res.status(201).json({
         ok: true,
