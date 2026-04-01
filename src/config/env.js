@@ -47,5 +47,6 @@ export const env = {
     process.env.ALLOW_LEGACY_PLAINTEXT_PASSWORDS === "true"
     || (process.env.ALLOW_LEGACY_PLAINTEXT_PASSWORDS == null && nodeEnv !== "production"),
   allowRegistrationSkipEmailVerification:
-    process.env.ALLOW_REGISTRATION_SKIP_EMAIL_VERIFICATION === "true"
+    process.env.ALLOW_REGISTRATION_SKIP_EMAIL_VERIFICATION === "true",
+  aftershipApiKey: process.env.AFTERSHIP_API_KEY || ""
 };

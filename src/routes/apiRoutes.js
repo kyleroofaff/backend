@@ -1,3 +1,8 @@
+import {
+  addOrderTracking,
+  getOrderTracking,
+  removeOrderTracking
+} from "../controllers/trackingController.js";
 import { Router } from "express";
 import {
   login,
@@ -274,5 +279,9 @@ router.post(
   rejectUnknownBodyKeys([]),
   acceptCustomRequestQuoteByBuyer
 );
+
+router.post("/orders/:orderId/tracking", requireAuth, rejectUnknownBodyKeys(["trackingNumber", "slug"]), addOrderTracking);
+router.get("/orders/:orderId/tracking", requireAuth, getOrderTracking);
+router.delete("/orders/:orderId/tracking", requireAuth, requireSuperAdmin, removeOrderTracking);
 
 export default router;
