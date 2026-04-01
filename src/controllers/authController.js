@@ -616,3 +616,24 @@ export function me(req, res) {
   }
   return res.json({ ok: true, user });
 }
+
+export async function impersonateUser(req, res, next) {
+  try {
+    const targetUserId = String(req.params?.userId || "").trim();
+    if (!targetUserId) {
+      return res.status(400).json({ error: "userId is required." });
+    }
+    const targetUser = await getUserById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    const token = signAuthToken(buildAuthPayload(targetUser));
+    return res.json({
+      ok: true,
+      token,
+      user: sanitizeUser(targetUser),
+    });
+  } catch (error) {
+    return next(error);
+  }
+}

@@ -7,7 +7,8 @@ import {
   updateUserAdminAccessBySuperAdmin,
   updateOwnCredentials,
   updateUserCredentialsByAdmin,
-  verifyEmail
+  verifyEmail,
+  impersonateUser
 } from "../controllers/authController.js";
 import {
   pushConfig,
@@ -131,6 +132,7 @@ router.post(
   rejectUnknownBodyKeys(["enabled", "scopes"]),
   updateUserAdminAccessBySuperAdmin
 );
+router.post("/admin/impersonate/:userId", requireAuth, requireSuperAdmin, impersonateUser);
 router.post("/push/subscribe", requireAuth, rejectUnknownBodyKeys(["subscription"]), subscribePush);
 router.post("/push/unsubscribe", requireAuth, rejectUnknownBodyKeys(["endpoint"]), unsubscribePush);
 router.post("/push/preferences", requireAuth, rejectUnknownBodyKeys(["push"]), updatePushPreferences);
