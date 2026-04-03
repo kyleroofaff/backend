@@ -334,7 +334,7 @@ export async function register(req, res, next) {
             const profile = created.profile || {};
             const newSeller = {
               id: sellerId,
-              name: `${name} Studio`,
+              name: name,
               location: [profile.city || city, profile.country || country].filter(Boolean).join(", "),
               specialty: "Everyday",
               specialties: ["Everyday"],

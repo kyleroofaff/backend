@@ -2036,7 +2036,7 @@ export async function approveSellerByAdmin(req, res) {
         ...existingSellers,
         {
           id: sellerId,
-          name: `${targetUser.name} Studio`,
+          name: targetUser.name,
           location: [targetUser.city, targetUser.country].filter(Boolean).join(", ") || "",
           specialty: "Everyday",
           specialties: ["Everyday"],
