@@ -41,11 +41,32 @@ export function bulkReplaceUsersInState(pgUsers) {
     }
   }
   dbState = { ...dbState, users: merged };
+
+  syncSellerNamesFromUsers(merged);
 }
 
 export function resetState() {
   dbState = structuredClone(seedData);
   return dbState;
+}
+
+function syncSellerNamesFromUsers(users) {
+  const sellers = Array.isArray(dbState.sellers) ? dbState.sellers : [];
+  const userById = new Map(users.filter((u) => u?.id).map((u) => [u.id, u]));
+  let changed = false;
+  const updated = sellers.map((seller) => {
+    const matchByUserId = users.find(
+      (u) => u.role === "seller" && u.sellerId === seller.id
+    );
+    if (matchByUserId && matchByUserId.name && matchByUserId.name !== seller.name) {
+      changed = true;
+      return { ...seller, name: matchByUserId.name };
+    }
+    return seller;
+  });
+  if (changed) {
+    dbState = { ...dbState, sellers: updated };
+  }
 }
 
 export function replaceState(nextState) {
