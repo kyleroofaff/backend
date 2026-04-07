@@ -25,12 +25,17 @@ export function getFullCatalog() {
   return getCatalog(getState());
 }
 
-export async function toggleCatalogItem(giftId, isActive) {
+export async function updateCatalogItem(giftId, { isActive, price }) {
   const state = getState();
   let catalog = getCatalog(state).map((item) => ({ ...item }));
   const idx = catalog.findIndex((g) => g.id === giftId);
   if (idx < 0) return { ok: false, error: "Gift item not found." };
-  catalog[idx].isActive = Boolean(isActive);
+  if (isActive !== undefined) catalog[idx].isActive = Boolean(isActive);
+  if (price !== undefined) {
+    const parsed = Number(price);
+    if (!Number.isFinite(parsed) || parsed <= 0) return { ok: false, error: "Invalid price." };
+    catalog[idx].price = parsed;
+  }
   await replaceStateAndSeed({ ...state, giftCatalog: catalog });
   return { ok: true, item: catalog[idx] };
 }
@@ -54,6 +59,10 @@ export async function purchaseGift({ buyerUserId, sellerId, giftType, message, i
 
   if (giftItem.fulfillmentType === "drink" && !seller.affiliatedBarId) {
     return { ok: false, error: "Drinks are only available for bar-affiliated sellers." };
+  }
+
+  if (Array.isArray(seller.disabledGiftTypes) && seller.disabledGiftTypes.includes(giftItem.type)) {
+    return { ok: false, error: "This seller does not accept this gift type." };
   }
 
   const now = new Date().toISOString();

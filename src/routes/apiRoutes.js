@@ -75,7 +75,7 @@ import {
 import {
   getActiveCatalog,
   getFullCatalog,
-  toggleCatalogItem,
+  updateCatalogItem,
   purchaseGift,
   getFulfillmentTasks,
   updateFulfillmentTaskStatus
@@ -164,7 +164,7 @@ router.put(
     "specialties", "specialtyI18n", "bio", "bioI18n",
     "shipping", "shippingI18n", "turnaround", "turnaroundI18n",
     "languages", "height", "weight", "hairColor", "braSize", "pantySize",
-    "affiliatedBarId", "feedVisibility", "birthDay", "birthMonth"
+    "affiliatedBarId", "feedVisibility", "birthDay", "birthMonth", "disabledGiftTypes"
   ]),
   updateSellerProfile
 );
@@ -299,9 +299,9 @@ router.patch(
   requireAuth,
   requireAdminAccess,
   idempotencyOptional,
-  rejectUnknownBodyKeys(["isActive"]),
+  rejectUnknownBodyKeys(["isActive", "price"]),
   async (req, res) => {
-    const result = await toggleCatalogItem(req.params.id, req.body.isActive);
+    const result = await updateCatalogItem(req.params.id, { isActive: req.body.isActive, price: req.body.price });
     if (!result.ok) return res.status(400).json({ error: result.error });
     res.json(result);
   }

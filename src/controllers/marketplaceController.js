@@ -2120,6 +2120,7 @@ export async function updateSellerProfile(req, res) {
     ...(body.feedVisibility !== undefined ? { feedVisibility: String(body.feedVisibility || "public").trim() } : {}),
     ...(body.birthDay !== undefined ? { birthDay: Number(body.birthDay) || null } : {}),
     ...(body.birthMonth !== undefined ? { birthMonth: Number(body.birthMonth) || null } : {}),
+    ...(Array.isArray(body.disabledGiftTypes) ? { disabledGiftTypes: body.disabledGiftTypes.map((v) => String(v || "").trim()).filter(Boolean) } : {}),
   };
 
   let nextSellers;
