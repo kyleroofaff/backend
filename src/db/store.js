@@ -67,6 +67,51 @@ function syncSellerNamesFromUsers(users) {
   if (changed) {
     dbState = { ...dbState, sellers: updated };
   }
+
+  scaffoldMissingSellers(users);
+}
+
+function scaffoldMissingSellers(users) {
+  const sellers = Array.isArray(dbState.sellers) ? dbState.sellers : [];
+  const sellerIdSet = new Set(sellers.map((s) => s.id));
+  const missing = users.filter(
+    (u) => u.role === "seller" && u.sellerId && !sellerIdSet.has(u.sellerId)
+  );
+  if (missing.length === 0) return;
+
+  const newSellers = missing.map((u) => {
+    const profile = u.profile && typeof u.profile === "object" ? u.profile : {};
+    return {
+      id: u.sellerId,
+      name: u.name || "",
+      location: [profile.city || u.city || "", profile.country || u.country || ""].filter(Boolean).join(", "),
+      specialty: "Everyday",
+      specialties: ["Everyday"],
+      bio: "",
+      shipping: "Worldwide",
+      turnaround: "Ships in 1-3 days",
+      isOnline: false,
+      feedVisibility: "public",
+      languages: ["English"],
+      highlights: ["New seller"],
+      portfolioUrl: "",
+      height: profile.heightCm || u.heightCm || "",
+      weight: profile.weightKg || u.weightKg || "",
+      hairColor: profile.hairColor || u.hairColor || "",
+      braSize: profile.braSize || u.braSize || "",
+      pantySize: profile.pantySize || u.pantySize || "",
+    };
+  });
+  console.log(`[store] Scaffolded ${newSellers.length} missing seller record(s):`, newSellers.map((s) => s.id).join(", "));
+  dbState = { ...dbState, sellers: [...sellers, ...newSellers] };
+}
+
+export function ensureSellerInState(user) {
+  if (!user || user.role !== "seller" || !user.sellerId) return false;
+  const sellers = Array.isArray(dbState.sellers) ? dbState.sellers : [];
+  if (sellers.some((s) => s.id === user.sellerId)) return true;
+  scaffoldMissingSellers([user]);
+  return dbState.sellers.some((s) => s.id === user.sellerId);
 }
 
 export function replaceState(nextState) {

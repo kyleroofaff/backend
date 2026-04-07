@@ -6,6 +6,7 @@ import {
   getPostReportsState,
   getSellerPostsState,
   getState,
+  ensureSellerInState,
   replaceState,
   replaceStateAndSeed,
   resolvePostReportInStateAndSeed,
@@ -1417,7 +1418,10 @@ export async function createSellerPost(req, res, next) {
       return res.status(400).json({ error: "sellerId and image are required." });
     }
 
-    const sellerExists = (getState().sellers || []).some((seller) => seller.id === sellerId);
+    let sellerExists = (getState().sellers || []).some((seller) => seller.id === sellerId);
+    if (!sellerExists) {
+      sellerExists = ensureSellerInState(req.auth?.user);
+    }
     if (!sellerExists) {
       return res.status(404).json({ error: "Seller not found." });
     }
