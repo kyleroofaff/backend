@@ -103,7 +103,11 @@ function scaffoldMissingSellers(users) {
     };
   });
   console.log(`[store] Scaffolded ${newSellers.length} missing seller record(s):`, newSellers.map((s) => s.id).join(", "));
-  dbState = { ...dbState, sellers: [...sellers, ...newSellers] };
+  const nextSellers = [...sellers, ...newSellers];
+  dbState = { ...dbState, sellers: nextSellers };
+  writeSeedData({ ...seedData, sellers: nextSellers }).catch((err) =>
+    console.error("[store] Failed to persist scaffolded sellers:", err.message)
+  );
 }
 
 export function ensureSellerInState(user) {
