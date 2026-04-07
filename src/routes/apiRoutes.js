@@ -73,6 +73,14 @@ import {
   toggleBarFollowHandler
 } from "../controllers/marketplaceController.js";
 import {
+  getActiveCatalog,
+  getFullCatalog,
+  toggleCatalogItem,
+  purchaseGift,
+  getFulfillmentTasks,
+  updateFulfillmentTaskStatus
+} from "../services/giftService.js";
+import {
   ADMIN_SCOPES,
   requireAdminAccess,
   requireAdminScope,
@@ -156,7 +164,7 @@ router.put(
     "specialties", "specialtyI18n", "bio", "bioI18n",
     "shipping", "shippingI18n", "turnaround", "turnaroundI18n",
     "languages", "height", "weight", "hairColor", "braSize", "pantySize",
-    "affiliatedBarId", "feedVisibility"
+    "affiliatedBarId", "feedVisibility", "birthDay", "birthMonth"
   ]),
   updateSellerProfile
 );
@@ -165,7 +173,7 @@ router.post(
   requireAuth,
   requireRole("seller"),
   idempotencyOptional,
-  rejectUnknownBodyKeys(["id", "title", "description", "priceTHB", "image", "imageName", "category", "status", "wearDays", "extras"]),
+  rejectUnknownBodyKeys(["id", "title", "description", "priceTHB", "image", "imageName", "images", "category", "status", "wearDays", "extras"]),
   createProduct
 );
 router.get("/seller-posts", getSellerPosts);
@@ -283,5 +291,60 @@ router.post(
 router.post("/orders/:orderId/tracking", requireAuth, rejectUnknownBodyKeys(["trackingNumber", "slug"]), addOrderTracking);
 router.get("/orders/:orderId/tracking", requireAuth, getOrderTracking);
 router.delete("/orders/:orderId/tracking", requireAuth, requireSuperAdmin, removeOrderTracking);
+
+router.get("/gifts/catalog", (req, res) => res.json(getActiveCatalog()));
+router.get("/gifts/catalog/admin", requireAuth, requireAdminAccess, (req, res) => res.json(getFullCatalog()));
+router.patch(
+  "/gifts/catalog/:id",
+  requireAuth,
+  requireAdminAccess,
+  idempotencyOptional,
+  rejectUnknownBodyKeys(["isActive"]),
+  async (req, res) => {
+    const result = await toggleCatalogItem(req.params.id, req.body.isActive);
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result);
+  }
+);
+router.post(
+  "/gifts/purchase",
+  requireAuth,
+  requireRole("buyer"),
+  requireIdempotencyKey,
+  idempotencyOptional,
+  rejectUnknownBodyKeys(["sellerId", "giftType", "message", "isAnonymous", "occasionType"]),
+  async (req, res) => {
+    const result = await purchaseGift({
+      buyerUserId: req.auth.user.id,
+      sellerId: req.body.sellerId,
+      giftType: req.body.giftType,
+      message: req.body.message,
+      isAnonymous: req.body.isAnonymous,
+      occasionType: req.body.occasionType,
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result);
+  }
+);
+router.get("/gifts/fulfillment", requireAuth, (req, res) => {
+  const user = req.auth?.user;
+  const tasks = getFulfillmentTasks({
+    sellerId: user?.sellerId || null,
+    barId: user?.barId || null,
+    isAdmin: user?.role === "admin",
+  });
+  res.json(tasks);
+});
+router.patch(
+  "/gifts/fulfillment/:taskId",
+  requireAuth,
+  idempotencyOptional,
+  rejectUnknownBodyKeys(["status"]),
+  async (req, res) => {
+    const result = await updateFulfillmentTaskStatus(req.params.taskId, req.body.status, req.auth.user.id);
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result);
+  }
+);
 
 export default router;

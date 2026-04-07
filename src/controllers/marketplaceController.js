@@ -1978,7 +1978,7 @@ export async function updateBarProfile(req, res) {
     specials: String(specials || "").trim(),
     mapEmbedUrl: String(mapEmbedUrl || "").trim(),
     mapLink: String(mapLink || "").trim(),
-    profileImage: String(profileImage || "").slice(0, 2 * 1024 * 1024),
+    profileImage: String(profileImage || "").slice(0, 4 * 1024 * 1024),
     profileImageName: String(profileImageName || "").trim(),
     aboutI18n: aboutI18n && typeof aboutI18n === "object" ? aboutI18n : {},
     specialsI18n: specialsI18n && typeof specialsI18n === "object" ? specialsI18n : {},
@@ -2093,7 +2093,7 @@ export async function updateSellerProfile(req, res) {
   const existingSellers = Array.isArray(state.sellers) ? state.sellers : [];
   const sellerIndex = existingSellers.findIndex((s) => String(s?.id || "").trim() === sellerId);
 
-  const profileImage = String(body.profileImage || "").slice(0, 2 * 1024 * 1024);
+  const profileImage = String(body.profileImage || "").slice(0, 4 * 1024 * 1024);
   const specialties = Array.isArray(body.specialties) ? body.specialties.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 8) : undefined;
   const languages = Array.isArray(body.languages) ? body.languages.map((v) => String(v || "").trim()).filter(Boolean) : undefined;
 
@@ -2109,7 +2109,7 @@ export async function updateSellerProfile(req, res) {
     ...(body.turnaround !== undefined ? { turnaround: String(body.turnaround || "").trim() } : {}),
     ...(body.turnaroundI18n && typeof body.turnaroundI18n === "object" ? { turnaroundI18n: body.turnaroundI18n } : {}),
     ...(languages ? { languages } : {}),
-    ...(profileImage ? { profileImage } : {}),
+    ...(body.profileImage !== undefined ? { profileImage } : {}),
     ...(body.profileImageName !== undefined ? { profileImageName: String(body.profileImageName || "").trim() } : {}),
     ...(body.height !== undefined ? { height: body.height } : {}),
     ...(body.weight !== undefined ? { weight: body.weight } : {}),
@@ -2118,6 +2118,8 @@ export async function updateSellerProfile(req, res) {
     ...(body.pantySize !== undefined ? { pantySize: String(body.pantySize || "").trim() } : {}),
     ...(body.affiliatedBarId !== undefined ? { affiliatedBarId: String(body.affiliatedBarId || "").trim() } : {}),
     ...(body.feedVisibility !== undefined ? { feedVisibility: String(body.feedVisibility || "public").trim() } : {}),
+    ...(body.birthDay !== undefined ? { birthDay: Number(body.birthDay) || null } : {}),
+    ...(body.birthMonth !== undefined ? { birthMonth: Number(body.birthMonth) || null } : {}),
   };
 
   let nextSellers;
@@ -2144,7 +2146,14 @@ export async function createProduct(req, res) {
   if (!Number.isFinite(priceTHB) || priceTHB <= 0) return res.status(400).json({ error: "Valid price is required." });
 
   const productId = body.id || `product_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  const image = String(body.image || "").slice(0, 2 * 1024 * 1024);
+  const image = String(body.image || "").slice(0, 4 * 1024 * 1024);
+  const rawImages = Array.isArray(body.images) ? body.images.slice(0, 5) : [];
+  const images = rawImages
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      return { url: String(entry.url || "").slice(0, 4 * 1024 * 1024), name: String(entry.name || "").trim() };
+    })
+    .filter((e) => e && e.url);
 
   const product = {
     id: productId,
@@ -2152,8 +2161,9 @@ export async function createProduct(req, res) {
     title,
     description: String(body.description || "").trim(),
     priceTHB: Number(priceTHB.toFixed(2)),
-    image,
-    imageName: String(body.imageName || "").trim(),
+    image: images.length > 0 ? images[0].url : image,
+    imageName: images.length > 0 ? images[0].name : String(body.imageName || "").trim(),
+    images,
     category: String(body.category || "panties").trim(),
     status: String(body.status || "Draft").trim(),
     wearDays: body.wearDays || null,

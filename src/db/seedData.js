@@ -65,5 +65,8 @@ export const seedData = {
   ],
   "barPosts": [],
   "customRequests": [],
-  "affiliationRequests": []
+  "affiliationRequests": [],
+  "giftCatalog": [],
+  "giftPurchases": [],
+  "giftFulfillmentTasks": []
 };
