@@ -103,7 +103,7 @@ function calculateSplit(prev, { sellerId, grossAmount }) {
   };
 }
 
-export async function sendBuyerPaidMessage({ buyerUserId, sellerId, conversationId, body }) {
+export async function sendBuyerPaidMessage({ buyerUserId, sellerId, conversationId, body, mediaUrl, mediaType }) {
   const messageText = String(body || "").trim();
   if (!buyerUserId || !sellerId || !conversationId || !messageText) {
     return { ok: false, code: 400, error: "sellerId, conversationId, and body are required." };
@@ -203,6 +203,7 @@ export async function sendBuyerPaidMessage({ buyerUserId, sellerId, conversation
         bodyOriginal: messageText,
         sourceLanguage: "en",
         translations: { en: messageText },
+        ...(mediaUrl ? { mediaUrl: String(mediaUrl).trim(), mediaType: String(mediaType || "image").trim() } : {}),
         feeCharged: MESSAGE_FEE_THB,
         createdAt: now,
         readByBuyer: true,

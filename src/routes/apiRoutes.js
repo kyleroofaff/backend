@@ -91,6 +91,34 @@ import {
 } from "../middlewares/auth.js";
 import { rejectUnknownBodyKeys, strictAuthRateLimit } from "../middlewares/security.js";
 import { idempotencyOptional, requireIdempotencyKey } from "../middlewares/idempotency.js";
+import multer from "multer";
+import { existsSync, mkdirSync } from "fs";
+import { extname } from "path";
+
+const MEDIA_DIR = "/app/data/media";
+if (!existsSync(MEDIA_DIR)) {
+  try { mkdirSync(MEDIA_DIR, { recursive: true }); } catch {}
+}
+
+const mediaStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, MEDIA_DIR),
+  filename: (_req, file, cb) => {
+    const ext = extname(file.originalname || "").toLowerCase() || ".bin";
+    cb(null, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`);
+  },
+});
+
+const mediaUpload = multer({
+  storage: mediaStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("video/") || file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image and video files are allowed"));
+    }
+  },
+});
 
 const router = Router();
 
@@ -177,7 +205,7 @@ router.post(
   createProduct
 );
 router.get("/seller-posts", getSellerPosts);
-router.post("/seller-posts", requireAuth, requireRole("seller"), idempotencyOptional, rejectUnknownBodyKeys(["image", "imageName", "caption", "captionI18n", "visibility", "accessPriceUsd", "scheduledFor"]), createSellerPost);
+router.post("/seller-posts", requireAuth, requireRole("seller"), idempotencyOptional, rejectUnknownBodyKeys(["image", "imageName", "caption", "captionI18n", "visibility", "accessPriceUsd", "scheduledFor", "mediaType"]), createSellerPost);
 router.delete("/seller-posts/:postId", requireAuth, requireRole("seller", "admin"), idempotencyOptional, deleteSellerPost);
 router.post("/seller-posts/:postId/report", requireAuth, requireRole("buyer", "seller", "admin"), idempotencyOptional, rejectUnknownBodyKeys(["reason"]), reportSellerPost);
 router.get("/seller-post-reports", requireAuth, requireAdminScope(ADMIN_SCOPES.PRODUCTS_MODERATE), getPostReports);
@@ -207,7 +235,7 @@ router.post(
   "/messages/bar-send",
   requireAuth,
   idempotencyOptional,
-  rejectUnknownBodyKeys(["conversationId", "body", "barId", "participantRole", "participantUserId", "sourceLanguage", "translations"]),
+  rejectUnknownBodyKeys(["conversationId", "body", "barId", "participantRole", "participantUserId", "sourceLanguage", "translations", "mediaUrl", "mediaType"]),
   sendBarMessage
 );
 router.post("/seller-follows/toggle", requireAuth, requireRole("buyer"), idempotencyOptional, rejectUnknownBodyKeys(["sellerId"]), toggleSellerFollowHandler);
@@ -239,7 +267,7 @@ router.post(
   requireRole("buyer"),
   requireIdempotencyKey,
   idempotencyOptional,
-  rejectUnknownBodyKeys(["sellerId", "conversationId", "body"]),
+  rejectUnknownBodyKeys(["sellerId", "conversationId", "body", "mediaUrl", "mediaType"]),
   sendBuyerMessageWithFee
 );
 router.post(
@@ -344,6 +372,24 @@ router.patch(
     const result = await updateFulfillmentTaskStatus(req.params.taskId, req.body.status, req.auth.user.id);
     if (!result.ok) return res.status(400).json({ error: result.error });
     res.json(result);
+  }
+);
+
+router.post(
+  "/media/upload",
+  requireAuth,
+  requireRole("seller"),
+  mediaUpload.single("file"),
+  (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    const isVideo = req.file.mimetype.startsWith("video/");
+    res.json({
+      ok: true,
+      url: `/media/${req.file.filename}`,
+      type: isVideo ? "video" : "image",
+      originalName: req.file.originalname,
+      size: req.file.size,
+    });
   }
 );
 

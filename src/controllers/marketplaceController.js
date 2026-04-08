@@ -1436,6 +1436,7 @@ export async function createSellerPost(req, res, next) {
       accessPriceUsd,
       image,
       imageName,
+      mediaType: req.body?.mediaType === "video" ? "video" : "image",
       scheduledFor,
       createdAt: scheduledFor || now,
     };
@@ -1909,7 +1910,9 @@ export async function sendBuyerMessageWithFee(req, res, next) {
       buyerUserId,
       sellerId: req.body?.sellerId,
       conversationId: req.body?.conversationId,
-      body: req.body?.body
+      body: req.body?.body,
+      mediaUrl: req.body?.mediaUrl,
+      mediaType: req.body?.mediaType,
     });
     if (!result.ok) {
       return res.status(result.code || 400).json({
@@ -2278,6 +2281,7 @@ export async function sendBarMessage(req, res) {
     bodyOriginal: messageBody,
     sourceLanguage: String(body.sourceLanguage || "en").trim(),
     translations: body.translations && typeof body.translations === "object" ? body.translations : {},
+    ...(body.mediaUrl ? { mediaUrl: String(body.mediaUrl).trim(), mediaType: String(body.mediaType || "image").trim() } : {}),
     feeCharged: 0,
     createdAt: now,
     readByBar: user.role === "bar",

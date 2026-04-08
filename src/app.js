@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 import morgan from "morgan";
+import { join } from "path";
 import apiRoutes from "./routes/apiRoutes.js";
 import { env } from "./config/env.js";
 import { apiRateLimit, helmetMiddleware } from "./middlewares/security.js";
@@ -40,7 +41,7 @@ app.use(
 );
 app.use(helmetMiddleware);
 app.use(apiRateLimit);
-app.use(express.json({ limit: "5mb" }));
+app.use(express.json({ limit: "15mb" }));
 app.use(morgan("dev"));
 
 app.get("/", (_req, res) => {
@@ -52,6 +53,10 @@ app.get("/", (_req, res) => {
 });
 
 app.use("/api", apiRoutes);
+app.use("/media", express.static(join("/app/data/media"), {
+  maxAge: "7d",
+  immutable: true,
+}));
 
 app.use((err, _req, res, _next) => {
   console.error(err);
